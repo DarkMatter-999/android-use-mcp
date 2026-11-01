@@ -201,6 +201,13 @@ importers:
         version: 5.0.5(@types/node@24.19.2)(vite@8.3.5(@types/node@24.19.2))
 
   packages/client:
+    dependencies:
+      '@android-use/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@android-use/transport':
+        specifier: workspace:*
+        version: link:../transport
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
@@ -242,6 +249,12 @@ importers:
 
   packages/runtime:
     dependencies:
+      '@android-use/client':
+        specifier: workspace:*
+        version: link:../client
+      '@android-use/protocol':
+        specifier: workspace:*
+        version: link:../protocol
       isolated-vm:
         specifier: 6.2.0
         version: 6.2.0

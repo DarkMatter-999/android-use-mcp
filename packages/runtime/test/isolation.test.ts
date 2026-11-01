@@ -46,4 +46,11 @@ describe('isolated-vm feasibility gate', () => {
     expect(DEFAULT_ISOLATE_TIMEOUT_MS).toBeGreaterThan(0);
     expect(DEFAULT_ISOLATE_TIMEOUT_MS).toBeLessThanOrEqual(5_000);
   });
+
+  it('rejects invalid or unbounded isolate timeout and heap options', async () => {
+    await expect(evaluateInIsolate('1', { timeoutMs: 0 })).rejects.toThrow(RangeError);
+    await expect(evaluateInIsolate('1', { timeoutMs: Number.POSITIVE_INFINITY })).rejects.toThrow(RangeError);
+    await expect(evaluateInIsolate('1', { memoryLimitMb: 0 })).rejects.toThrow(RangeError);
+    await expect(evaluateInIsolate('1', { memoryLimitMb: 513 })).rejects.toThrow(RangeError);
+  });
 });

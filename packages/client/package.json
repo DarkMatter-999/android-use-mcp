@@ -12,6 +12,10 @@
     "test": "vitest run --root ../.. packages/client/ --passWithNoTests",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
+  "dependencies": {
+    "@android-use/protocol": "workspace:*",
+    "@android-use/transport": "workspace:*"
+  },
   "devDependencies": {
     "@types/node": "catalog:",
     "typescript": "catalog:",
