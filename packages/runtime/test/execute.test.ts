@@ -20,10 +20,11 @@ function makeDevice(queryResponse: unknown = { count: 1, revision: 9, elements: 
         width: 100, height: 200, elements: [uiElement], truncated: false,
       } as T;
       if (method === 'element.query') return queryResponse as T;
-      if (method === 'element.action') return {
+      if (method === 'element.action' || method === 'gesture.perform') return {
         actionId: 'action-1', action: params.action, accepted: true, verified: null,
         revisionBefore: 9, revisionAfter: 10,
       } as T;
+      if (method === 'app.launch') return { launched: true, packageName: params.packageName } as T;
       throw new Error(`unexpected RPC ${method}`);
     },
   };
@@ -45,11 +46,44 @@ describe('executeCode isolated Android runtime', () => {
     expect(calls[1]?.params).toEqual({ selector: { type: 'text', value: 'Next', exact: true } });
   });
 
+  it('serializes a selector-backed scroll target across the isolate bridge', async () => {
+    const { device, calls } = makeDevice();
+
+    const output = await executeCode(
+      "(async () => android.getByResourceId('list').scrollUntilVisible(android.getByText('Next', {exact:true}), {direction:'down', maxSteps:2}))()",
+      { device },
+    );
+
+    expect(output.result).toMatchObject({ visible: true, steps: 0, exhausted: false });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.method).toBe('element.query');
+    expect(calls[0]?.params).toEqual({ selector: { type: 'text', value: 'Next', exact: true } });
+  });
+
   it('keeps logs within the output budget without double-counting their bytes', async () => {
     const { device } = makeDevice();
 
     await expect(executeCode('(async () => { console.log("hi"); return "ok"; })()', { device, maxResultBytes: 13 }))
       .resolves.toMatchObject({ result: 'ok', logs: ['hi'], actions: [] });
+  });
+
+  it('exposes only bounded action SDK helpers through the isolated bridge', async () => {
+    const { device, calls } = makeDevice();
+    const result = await executeCode(`(async () => {
+      const long = await android.getByText('Next').longClick();
+      const cleared = await android.getByText('Next').clear();
+      const swipe = await android.performGesture('swipe', {x: 1, y: 2, endX: 10, endY: 20, durationMillis: 250});
+      const back = await android.performGlobalAction('back');
+      const launch = await android.launchApp('com.android.settings');
+      return {long: long.accepted, cleared: cleared.accepted, swipe: swipe.accepted, back: back.accepted, launch};
+    })()`, { device });
+
+    expect(result.result).toMatchObject({ long: true, cleared: true, swipe: true, back: true, launch: { launched: true } });
+    expect(calls.map(({ method }) => method)).toEqual([
+      'element.query', 'element.action', 'element.query', 'element.action',
+      'gesture.perform', 'element.action', 'app.launch',
+    ]);
+    expect(result.actions).toHaveLength(4);
   });
 
   it('does not expose Node globals or constructor-based host escapes', async () => {

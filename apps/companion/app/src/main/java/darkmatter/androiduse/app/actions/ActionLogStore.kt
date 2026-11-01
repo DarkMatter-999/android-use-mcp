@@ -26,6 +26,9 @@ data class ActionLogEntry(
     val selectorKind: String? = null,
     val targetResourceId: String? = null,
     val targetBounds: UiBounds? = null,
+    /** Coordinate-only gesture start point; contains no user-entered content. */
+    val gestureX: Int? = null,
+    val gestureY: Int? = null,
     val accepted: Boolean,
     /** `null` means dispatched/accepted but not independently verified. */
     val verified: Boolean?,
@@ -42,6 +45,8 @@ data class ActionLogEntry(
         action = action.trim(),
         selectorKind = selectorKind.clean(),
         targetResourceId = targetResourceId.clean(),
+        gestureX = gestureX?.takeIf { it in 0..ActionRequest.MAX_COORDINATE },
+        gestureY = gestureY?.takeIf { it in 0..ActionRequest.MAX_COORDINATE },
         errorMessage = if (sensitive) null else errorMessage.clean(),
     )
 

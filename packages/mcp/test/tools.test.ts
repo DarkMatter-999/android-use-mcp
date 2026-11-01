@@ -10,6 +10,12 @@ function createDependencies() {
     snapshot: vi.fn(async (_input: { mode: 'full' | 'compact' | 'actionable' }) => ({ deviceId: 'device-1', windowId: 'window-1', revision: 4, width: 100, height: 200, elements: [], truncated: false })),
     execute: vi.fn(async (_code: string, _timeoutMs: number) => ({ result: 4, logs: [], actions: [], durationMs: 2 })),
     disconnect: vi.fn(async () => ({ disconnected: true })),
+    screenshot: vi.fn(async () => ({
+      bytes: new Uint8Array([0xff, 0xd8, 0xff]), mimeType: 'image/jpeg' as const,
+      width: 10, height: 20, timestampMillis: 123, deviceId: 'device-1', windowId: 'window-1',
+    })),
+    openApp: vi.fn(async (packageName: string, _timeoutMs: number) => ({ launched: true, packageName })),
+    gesture: vi.fn(async (input: unknown) => ({ action: input, accepted: true })),
   };
 }
 
@@ -48,6 +54,11 @@ describe('MCP tool handlers', () => {
       () => tools.android_execute({ code: '1', timeoutMs: 60_001 }),
       () => tools.android_execute({ code: '1', timeoutMs: 1.5 }),
       () => tools.android_disconnect({ extra: true }),
+      () => tools.android_screenshot({ extra: true }),
+      () => tools.android_open_app({ packageName: 'not a package' }),
+      () => tools.android_gesture({ action: 'swipe', x: 1, y: 1 }),
+      () => tools.android_gesture({ action: 'tap', x: -1, y: 1 }),
+      () => tools.android_gesture({ action: 'back', x: 1, y: 1 }),
     ];
 
     for (const invoke of invalidCalls) {
@@ -58,6 +69,35 @@ describe('MCP tool handlers', () => {
     expect(deps.snapshot).not.toHaveBeenCalled();
     expect(deps.execute).not.toHaveBeenCalled();
     expect(deps.disconnect).not.toHaveBeenCalled();
+    expect(deps.screenshot).not.toHaveBeenCalled();
+    expect(deps.openApp).not.toHaveBeenCalled();
+    expect(deps.gesture).not.toHaveBeenCalled();
+  });
+
+  it('delegates no-input screenshot capture and preserves image metadata', async () => {
+    const deps = createDependencies();
+    const tools = createToolHandlers(deps);
+    await expect(tools.android_screenshot({})).resolves.toMatchObject({ width: 10, height: 20, mimeType: 'image/jpeg' });
+    expect(deps.screenshot).toHaveBeenCalledOnce();
+  });
+
+  it('maps Android launch rejection to concise guidance without leaking error details', () => {
+    expect(formatToolError(Object.assign(new Error('app launch was rejected by Android: private detail'), {
+      code: 'INTERNAL', details: { reason: 'LAUNCH_REJECTED' },
+    }))).toBe('Android rejected the app launch. Check the phone state and try again if safe.');
+  });
+
+  it('delegates strict app launch and gesture actions with bounded options', async () => {
+    const deps = createDependencies();
+    const tools = createToolHandlers(deps);
+    await expect(tools.android_open_app({ packageName: 'com.android.settings' })).resolves.toMatchObject({ launched: true });
+    await tools.android_gesture({ action: 'swipe', x: 1, y: 2, endX: 10, endY: 20, durationMillis: 200, timeoutMs: 900 });
+    await tools.android_gesture({ action: 'back' });
+    expect(deps.openApp).toHaveBeenCalledWith('com.android.settings', 5_000);
+    expect(deps.gesture).toHaveBeenNthCalledWith(1, {
+      action: 'swipe', x: 1, y: 2, endX: 10, endY: 20, durationMillis: 200, timeoutMs: 900,
+    });
+    expect(deps.gesture).toHaveBeenNthCalledWith(2, { action: 'back', timeoutMs: 5_000 });
   });
 
   it('maps known transport and runtime errors to actionable safe guidance', () => {

@@ -275,6 +275,7 @@ object RpcProtocol {
         "element.action",
         "gesture.perform",
         "screenshot.capture",
+        "app.launch",
         RPC_CANCEL_METHOD,
     )
 
@@ -318,6 +319,9 @@ object RpcProtocol {
 
     fun encodeSnapshot(snapshot: UiSnapshot): JsonElement =
         json.encodeToJsonElement(UiSnapshot.serializer(), snapshot)
+
+    fun encodeScreenshot(result: ScreenshotRpcResult): JsonElement =
+        json.encodeToJsonElement(ScreenshotRpcResult.serializer(), result)
 
     fun decodeSnapshot(element: JsonElement): UiSnapshot =
         json.decodeFromJsonElement(UiSnapshot.serializer(), element)
@@ -450,3 +454,14 @@ object RpcProtocol {
         return text
     }
 }
+
+@Serializable
+data class ScreenshotRpcResult(
+    val imageBase64: String,
+    val mimeType: String,
+    val width: Int,
+    val height: Int,
+    val timestampMillis: Long,
+    val deviceId: String,
+    val windowId: String,
+)

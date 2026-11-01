@@ -47,6 +47,7 @@ data class ServiceState(
     val pendingHostName: String? = null,
     val pendingHostFingerprintSha256: String? = null,
     val approvedHosts: List<ApprovedHostState> = emptyList(),
+    val overlayOptions: darkmatter.androiduse.app.overlay.OverlayOptions = darkmatter.androiduse.app.overlay.OverlayOptions(false, true, true, true, true),
 ) {
     /** Remote control can start only after accessibility is enabled and bound. */
     val canEnableRemoteControl: Boolean get() = enabled && connected
@@ -187,6 +188,32 @@ object ServicePreferences {
     private const val KEY_REMOTE_ENABLED = "remote_enabled"
     private const val KEY_EXPLANATION_ACK = "device_control_explained"
     private const val KEY_DEVICE_ID = "device_id"
+    private const val KEY_OVERLAY_INSPECTOR = "overlay_inspector"
+    private const val KEY_OVERLAY_BOUNDS = "overlay_bounds"
+    private const val KEY_OVERLAY_LABELS = "overlay_labels"
+    private const val KEY_OVERLAY_ACTION_TRACE = "overlay_action_trace"
+    private const val KEY_OVERLAY_CURSOR = "overlay_cursor"
+
+    fun overlayOptions(context: Context): darkmatter.androiduse.app.overlay.OverlayOptions {
+        val preferences = prefs(context)
+        return darkmatter.androiduse.app.overlay.OverlayOptions(
+            inspector = preferences.getBoolean(KEY_OVERLAY_INSPECTOR, false),
+            bounds = preferences.getBoolean(KEY_OVERLAY_BOUNDS, true),
+            labels = preferences.getBoolean(KEY_OVERLAY_LABELS, true),
+            actionTrace = preferences.getBoolean(KEY_OVERLAY_ACTION_TRACE, true),
+            cursor = preferences.getBoolean(KEY_OVERLAY_CURSOR, true),
+        )
+    }
+
+    fun setOverlayOptions(context: Context, options: darkmatter.androiduse.app.overlay.OverlayOptions) {
+        prefs(context).edit {
+            putBoolean(KEY_OVERLAY_INSPECTOR, options.inspector)
+            putBoolean(KEY_OVERLAY_BOUNDS, options.bounds)
+            putBoolean(KEY_OVERLAY_LABELS, options.labels)
+            putBoolean(KEY_OVERLAY_ACTION_TRACE, options.actionTrace)
+            putBoolean(KEY_OVERLAY_CURSOR, options.cursor)
+        }
+    }
 
     fun isRemoteEnabled(context: Context): Boolean =
         prefs(context).getBoolean(KEY_REMOTE_ENABLED, false)

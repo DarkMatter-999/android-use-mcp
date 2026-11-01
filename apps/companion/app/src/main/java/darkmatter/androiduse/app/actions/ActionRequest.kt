@@ -28,6 +28,20 @@ object ActionNames {
     val supported: Set<String> = nodeActions + gestureActions + globalActions
 }
 
+/** Fixed, phone-side package allowlist; never populated by an RPC caller. */
+object AppLaunchPolicy {
+    val allowedPackages: Set<String> = setOf("com.android.settings", "darkmatter.androiduse.app")
+    private val packagePattern = Regex("^[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)+$")
+
+    fun validate(packageName: String): AppLaunchValidation = when {
+        !packagePattern.matches(packageName) -> AppLaunchValidation.INVALID
+        packageName !in allowedPackages -> AppLaunchValidation.NOT_ALLOWLISTED
+        else -> AppLaunchValidation.ALLOWED
+    }
+}
+
+enum class AppLaunchValidation { ALLOWED, INVALID, NOT_ALLOWLISTED }
+
 /** Scroll direction for a native node scroll action. */
 @Serializable
 enum class ScrollDirection {

@@ -13,6 +13,12 @@ function createServices(overrides: Partial<CliServices> = {}) {
     snapshot: vi.fn(async () => ({})),
     execute: vi.fn(async () => ({})),
     disconnect,
+    screenshot: vi.fn(async () => ({
+      bytes: new Uint8Array([0xff, 0xd8, 0xff]), mimeType: 'image/jpeg' as const,
+      width: 1, height: 1, timestampMillis: 1, deviceId: 'device', windowId: 'window',
+    })),
+    openApp: vi.fn(async (packageName: string) => ({ launched: true, packageName })),
+    gesture: vi.fn(async () => ({ accepted: true })),
   } satisfies McpToolDependencies;
   const services: CliServices = {
     readCertificate: vi.fn(async () => 'device-certificate-pem'),

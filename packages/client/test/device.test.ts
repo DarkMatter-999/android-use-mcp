@@ -41,6 +41,28 @@ function createDevice(responses: unknown[] = []) {
 }
 
 describe('AndroidDevice lazy locators', () => {
+  it('decodes and validates a screenshot response into bounded image bytes and metadata', async () => {
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/n9sAAAAASUVORK5CYII=';
+    const { device, calls } = createDevice([{
+      imageBase64: png, mimeType: 'image/png', width: 1, height: 1,
+      timestampMillis: 123, deviceId: 'device-1', windowId: 'window-1',
+    }]);
+
+    await expect(device.screenshot()).resolves.toMatchObject({
+      mimeType: 'image/png', width: 1, height: 1, timestampMillis: 123,
+      deviceId: 'device-1', windowId: 'window-1',
+    });
+    expect(calls[0]).toEqual({ method: 'screenshot.capture', params: {} });
+  });
+
+  it('rejects malformed base64 and inconsistent image metadata', async () => {
+    const { device } = createDevice([{
+      imageBase64: 'not base64!', mimeType: 'image/png', width: 1, height: 1,
+      timestampMillis: 123, deviceId: 'device-1', windowId: 'window-1',
+    }]);
+    await expect(device.screenshot()).rejects.toThrow(/screenshot/i);
+  });
+
   it('creates locators without RPC and queries only when evaluated', async () => {
     const { device, calls } = createDevice();
     const locator = device.getByText('Continue', { exact: true });
@@ -70,13 +92,24 @@ describe('AndroidDevice lazy locators', () => {
       { method: 'element.query', params: { selector: { type: 'text', value: 'Continue' } } },
       {
         method: 'element.action',
-        params: {
+        params: expect.objectContaining({
           action: 'click',
           selector: { type: 'ref', value: 'ref-continue', revision: 12 },
           expectedRevision: 12,
-        },
+        }),
       },
     ]);
+    expect(calls[1]?.params['actionId']).toMatch(/^[0-9a-f-]{36}$/i);
+  });
+
+  it('dispatches long-click and clear as distinct typed actions', async () => {
+    const { device, calls } = createDevice();
+    await device.getByText('Continue').longClick();
+    await device.getByText('Continue').clear();
+    expect(calls.filter(({ method }) => method === 'element.action').map(({ params }) => params['action']))
+      .toEqual(['longClick', 'clear']);
+    expect(calls.filter(({ method }) => method === 'element.action').every(({ params }) => typeof params['actionId'] === 'string'))
+      .toBe(true);
   });
 
   it('preserves filters and explicit index while resolving a locator', async () => {

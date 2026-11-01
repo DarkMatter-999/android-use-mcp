@@ -34,6 +34,15 @@ class FakeConnection {
       deviceId: 'device-1', windowId: 'window-1', revision: 7,
       width: 100, height: 200, elements: [], truncated: false,
     };
+    if (method === 'screenshot.capture') return {
+      imageBase64: '/9j/', mimeType: 'image/jpeg', width: 10, height: 20,
+      timestampMillis: 123, deviceId: 'device-1', windowId: 'window-1',
+    };
+    if (method === 'app.launch') return { launched: true, packageName: params['packageName'] };
+    if (method === 'element.action' || method === 'gesture.perform') return {
+      actionId: 'action-1', action: params['action'], accepted: true, verified: null,
+      revisionBefore: 1, revisionAfter: 1,
+    };
     throw new Error(`unexpected RPC ${method}: ${JSON.stringify(params)}`);
   });
 
@@ -99,5 +108,31 @@ describe('lazy MCP runtime dependencies', () => {
     });
     expect(connect).toHaveBeenCalledTimes(1);
     expect(connection.request).toHaveBeenCalledWith('snapshot.get', { mode: 'full' }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+  });
+
+  it('delegates screenshot capture to the same authenticated Android device', async () => {
+    const connection = new FakeConnection();
+    const connect = vi.fn(async () => connection as unknown as RpcConnection);
+    const dependencies = createRuntimeDependencies(config, { connect });
+
+    await expect(dependencies.screenshot()).resolves.toMatchObject({
+      mimeType: 'image/jpeg', width: 10, height: 20, deviceId: 'device-1',
+    });
+    expect(connection.request).toHaveBeenCalledWith('screenshot.capture', {}, undefined);
+  });
+
+  it('delegates app launch and coordinate/global actions to the same device instance', async () => {
+    const connection = new FakeConnection();
+    const connect = vi.fn(async () => connection as unknown as RpcConnection);
+    const dependencies = createRuntimeDependencies(config, { connect });
+
+    await expect(dependencies.openApp('com.android.settings', 800)).resolves.toMatchObject({ launched: true });
+    await dependencies.gesture({ action: 'swipe', x: 1, y: 2, endX: 5, endY: 6, durationMillis: 300, timeoutMs: 900 });
+    await dependencies.gesture({ action: 'back', timeoutMs: 500 });
+
+    expect(connection.request).toHaveBeenCalledWith('app.launch', { packageName: 'com.android.settings' }, expect.objectContaining({ timeoutMs: 800 }));
+    expect(connection.request).toHaveBeenCalledWith('gesture.perform', expect.objectContaining({ action: 'swipe', x: 1, endX: 5, durationMillis: 300 }), expect.objectContaining({ timeoutMs: 900 }));
+    expect(connection.request).toHaveBeenCalledWith('element.action', expect.objectContaining({ action: 'back' }), expect.objectContaining({ timeoutMs: 500 }));
+    expect(connect).toHaveBeenCalledOnce();
   });
 });

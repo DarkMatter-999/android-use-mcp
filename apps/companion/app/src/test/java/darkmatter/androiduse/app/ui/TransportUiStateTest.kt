@@ -1,6 +1,7 @@
 package darkmatter.androiduse.app.ui
 
 import darkmatter.androiduse.app.accessibility.ServiceState
+import darkmatter.androiduse.app.accessibility.TransportKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -36,5 +37,13 @@ class TransportUiStateTest {
         assertFalse(ui.toString().contains(code))
         assertFalse(ui.toString().contains(certificate))
         assertTrue(ui.statusMessage.contains("ready"))
+    }
+
+    @Test
+    fun `only a live wifi endpoint is displayed as an address and port`() {
+        assertEquals("192.168.1.20:43210", listenerEndpointLabel(TransportKind.WIFI, "192.168.1.20", 43210))
+        assertEquals("Wi-Fi listener unavailable", listenerEndpointLabel(TransportKind.WIFI, null, null))
+        assertEquals("Loopback (local only)", listenerEndpointLabel(TransportKind.NONE, "127.0.0.1", 43210))
+        assertEquals("Not listening", listenerEndpointLabel(TransportKind.NONE, null, null))
     }
 }

@@ -2,7 +2,7 @@ import { AndroidDevice } from '@android-use/client';
 import { executeCode } from '@android-use/runtime';
 import { PairingClient, RpcConnection, type RpcConnectionConfig } from '@android-use/transport';
 
-import type { McpToolDependencies } from './tools.js';
+import type { McpGestureInput, McpToolDependencies } from './tools.js';
 
 export interface RuntimeDependencyFactories {
   connect(config: RpcConnectionConfig): Promise<RpcConnection>;
@@ -59,6 +59,15 @@ export function createRuntimeDependencies(
       connection = undefined;
       device = undefined;
       return { disconnected: true };
+    },
+    screenshot: async () => (await connectedDevice()).screenshot(),
+    openApp: async (packageName, timeoutMs) => (await connectedDevice()).launchApp(packageName, { timeoutMs }),
+    gesture: async (input: McpGestureInput) => {
+      const device = await connectedDevice();
+      if (!('x' in input)) {
+        return device.performGlobalAction(input.action, { timeoutMs: input.timeoutMs });
+      }
+      return device.performGesture(input.action, input);
     },
   };
 }

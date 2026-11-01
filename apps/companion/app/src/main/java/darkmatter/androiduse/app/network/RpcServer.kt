@@ -164,14 +164,13 @@ class RpcServer(
             listener = null
         }
         runCatching { currentListener?.close() }
-        sockets.toList().forEach { runCatching { it.close() } }
+        sockets.forEach { socket -> runCatching { socket.close() } }
         connectionPool?.shutdownNow()
         requestPool?.shutdownNow()
         writeTimeouts?.shutdownNow()
         connectionPool = null
         requestPool = null
         writeTimeouts = null
-        leases.clear()
     }
 
     override fun close() {

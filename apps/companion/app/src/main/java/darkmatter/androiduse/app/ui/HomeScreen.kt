@@ -55,6 +55,7 @@ import java.util.Date
 import java.util.Locale
 import darkmatter.androiduse.app.accessibility.TransportKind
 import darkmatter.androiduse.app.actions.ActionLogEntry
+import darkmatter.androiduse.app.overlay.OverlayOptions
 import darkmatter.androiduse.app.network.UiBounds
 import darkmatter.androiduse.app.ui.theme.AndroidUseTheme
 
@@ -101,6 +102,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
         onAcknowledgeExplanation = viewModel::acknowledgeExplanation,
         onDisconnect = viewModel::disconnect,
         onWifiChange = viewModel::setWifiEnabled,
+        onOverlayOptionsChange = viewModel::setOverlayOptions,
         onBeginPairing = viewModel::beginPairing,
         onApproveHost = viewModel::approveHost,
         onRejectHost = viewModel::rejectHost,
@@ -121,6 +123,7 @@ fun HomeContent(
     onAcknowledgeExplanation: () -> Unit,
     onDisconnect: () -> Unit,
     onWifiChange: (Boolean) -> Unit = {},
+    onOverlayOptionsChange: (OverlayOptions) -> Unit = {},
     onBeginPairing: () -> Unit = {},
     onApproveHost: (String) -> Unit = {},
     onRejectHost: (String) -> Unit = {},
@@ -156,6 +159,7 @@ fun HomeContent(
                 onRevokeHost = onRevokeHost,
                 onCopyPublicValue = onCopyPublicValue,
             )
+            OverlaySettingsCard(state.overlayOptions, onOverlayOptionsChange, state.accessibilityConnected)
             RecentActionsCard(state.recentActions)
             StopControl(state, onDisconnect)
             Text(
@@ -167,6 +171,48 @@ fun HomeContent(
             )
             Spacer(Modifier.height(8.dp))
         }
+    }
+}
+
+@Composable
+private fun OverlaySettingsCard(
+    options: OverlayOptions,
+    onOptionsChange: (OverlayOptions) -> Unit,
+    accessibilityConnected: Boolean,
+) {
+    SectionCard(title = "Inspector overlay") {
+        Text(
+            "Visual-only decorations. This setting does not enable accessibility, remote control, or Wi-Fi.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OverlayToggle("Enable inspector", options.inspector, accessibilityConnected) {
+            onOptionsChange(options.copy(inspector = it))
+        }
+        OverlayToggle("Element bounds", options.bounds, options.inspector) {
+            onOptionsChange(options.copy(bounds = it))
+        }
+        OverlayToggle("Compact labels", options.labels, options.inspector) {
+            onOptionsChange(options.copy(labels = it))
+        }
+        OverlayToggle("Action trace", options.actionTrace, options.inspector) {
+            onOptionsChange(options.copy(actionTrace = it))
+        }
+        OverlayToggle("Cursor feedback", options.cursor, options.inspector) {
+            onOptionsChange(options.copy(cursor = it))
+        }
+    }
+}
+
+@Composable
+private fun OverlayToggle(label: String, checked: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(label, modifier = Modifier.weight(1f))
+        Switch(checked = checked, onCheckedChange = onChange, enabled = enabled)
     }
 }
 
@@ -311,9 +357,7 @@ private fun ConnectionCard(
         InfoRow("Paired host", state.activeHost ?: "None")
         InfoRow(
             "Listener endpoint",
-            if (state.endpointAddress != null && state.endpointPort != null) {
-                "${state.endpointAddress}:${state.endpointPort}"
-            } else "Not listening",
+            listenerEndpointLabel(state.transport, state.endpointAddress, state.endpointPort),
         )
         InfoRow(
             "Session",

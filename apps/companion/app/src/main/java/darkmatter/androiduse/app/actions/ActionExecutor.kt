@@ -620,6 +620,8 @@ class ActionExecutor(
                     selectorKind = null,
                     targetResourceId = null,
                     targetBounds = null,
+                    gestureX = spec.startX,
+                    gestureY = spec.startY,
                     sensitive = request.isSensitive,
                 )
             }
@@ -827,6 +829,8 @@ class ActionExecutor(
                 selectorKind = outcome.selectorKind,
                 targetResourceId = outcome.targetResourceId,
                 targetBounds = outcome.targetBounds,
+                gestureX = outcome.gestureX,
+                gestureY = outcome.gestureY,
                 accepted = result.accepted,
                 verified = result.verified,
                 revisionBefore = result.revisionBefore,
@@ -1005,6 +1009,8 @@ class ActionExecutor(
         val targetResourceId: String?,
         val targetBounds: UiBounds?,
         val sensitive: Boolean,
+        val gestureX: Int? = null,
+        val gestureY: Int? = null,
     )
 
     private fun targetFor(meta: TargetMeta?): ActionResultTarget? = meta?.let {

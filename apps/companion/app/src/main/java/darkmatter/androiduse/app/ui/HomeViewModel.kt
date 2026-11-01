@@ -21,6 +21,7 @@ import darkmatter.androiduse.app.accessibility.UseService
 import darkmatter.androiduse.app.accessibility.isAccessibilityServiceEnabled
 import darkmatter.androiduse.app.actions.ActionLogEntry
 import darkmatter.androiduse.app.actions.ActionLogStore
+import darkmatter.androiduse.app.overlay.OverlayOptions
 
 /** Immutable screen state. Every field is derived from an observable source. */
 data class HomeUiState(
@@ -47,6 +48,7 @@ data class HomeUiState(
     val pendingHostFingerprintSha256: String? = null,
     val approvedHosts: List<ApprovedHostState> = emptyList(),
     val transportError: String? = null,
+    val overlayOptions: OverlayOptions = OverlayOptions(false, true, true, true, true),
 ) {
     override fun toString(): String = "HomeUiState(deviceModel=$deviceModel, apiLevel=$apiLevel, " +
         "accessibilityEnabled=$accessibilityEnabled, accessibilityConnected=$accessibilityConnected, " +
@@ -60,6 +62,13 @@ internal fun remoteConnectionStatus(service: ServiceState): String = when {
     service.sessionActive && service.activeHost != null -> "Connected to ${service.activeHost}."
     service.remoteEnabled -> "Remote control is on. Waiting for an authenticated host."
     else -> "Remote control is off."
+}
+
+internal fun listenerEndpointLabel(transport: TransportKind, address: String?, port: Int?): String = when {
+    transport == TransportKind.WIFI && address != null && port != null -> "$address:$port"
+    transport == TransportKind.WIFI -> "Wi-Fi listener unavailable"
+    address != null && port != null -> "Loopback (local only)"
+    else -> "Not listening"
 }
 
 /**
@@ -189,6 +198,15 @@ class HomeViewModel(
         }
     }
 
+    fun setOverlayOptions(options: OverlayOptions) {
+        UseService.setOverlayOptions(appContext, options)
+        statusOverride.value = if (options.inspector) {
+            "Inspector overlay enabled independently of remote control."
+        } else {
+            "Inspector overlay disabled."
+        }
+    }
+
     fun beginPairing() {
         val challenge = UseService.beginPairing(appContext)
         statusOverride.value = if (challenge != null) {
@@ -263,6 +281,7 @@ class HomeViewModel(
             pendingHostFingerprintSha256 = service.pendingHostFingerprintSha256,
             approvedHosts = service.approvedHosts,
             transportError = service.lastError,
+            overlayOptions = service.overlayOptions,
         )
     }
 }

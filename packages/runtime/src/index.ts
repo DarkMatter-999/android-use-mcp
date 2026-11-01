@@ -1,6 +1,6 @@
 import ivm from 'isolated-vm';
 import { selectorSchema, type ActionResult, type Selector } from '@android-use/protocol';
-import type { AndroidDevice, Locator, LocatorOptions, ScrollDirection } from '@android-use/client';
+import type { AndroidDevice, Locator, LocatorOptions, ScrollDirection, GestureKind, GlobalAction } from '@android-use/client';
 
 /** Default wall-clock limit for one isolate evaluation. */
 export const DEFAULT_ISOLATE_TIMEOUT_MS = 1_000;
@@ -170,13 +170,18 @@ export async function executeCode(source: string, options: ExecuteCodeOptions): 
           return response.value;
         };
         const __locator = (selector, options) => Object.freeze({
+          __selector: selector,
+          __options: options,
           count: () => __call('count', [selector, options]),
           isVisible: () => __call('isVisible', [selector, options]),
           bounds: () => __call('bounds', [selector, options]),
           state: () => __call('state', [selector, options]),
           click: () => __call('click', [selector, options]),
+          longClick: () => __call('longClick', [selector, options]),
+          clear: () => __call('clear', [selector, options]),
           fill: value => __call('fill', [selector, options, value]),
           scroll: direction => __call('scroll', [selector, options, direction]),
+          scrollUntilVisible: (target, scrollOptions) => __call('scrollUntilVisible', [selector, options, target?.__selector, target?.__options, scrollOptions]),
         });
         globalThis.android = Object.freeze({
           snapshot: (options = {}) => __call('snapshot', [options]),
@@ -185,6 +190,9 @@ export async function executeCode(source: string, options: ExecuteCodeOptions): 
           getByDescription: (value, options = {}) => __locator({type:'description', value}, options),
           getByRole: (value, options = {}) => { const {name, ...filters} = options; return __locator({type:'role', value, ...(name === undefined ? {} : {name})}, filters); },
           getByRef: (value, revision) => __locator({type:'ref', value, revision}, {}),
+          performGesture: (kind, options) => __call('performGesture', [kind, options]),
+          performGlobalAction: (action, options = {}) => __call('performGlobalAction', [action, options]),
+          launchApp: (packageName, options = {}) => __call('launchApp', [packageName, options]),
         });
         globalThis.console = Object.freeze({log: (...args) => __call('log', args)});
         try {
@@ -272,7 +280,19 @@ function parseBridgeCommand(input: string): BridgeCommand {
 }
 
 async function dispatchBridge(device: AndroidDevice, command: BridgeCommand, signal: AbortSignal): Promise<unknown> {
-  const [first, second, third] = command.args;
+  const [first, second, third, fourth, fifth] = command.args;
+  if (command.op === 'performGesture') {
+    if (first !== 'tap' && first !== 'longPress' && first !== 'swipe') throw new Error('gesture kind is invalid');
+    return device.performGesture(first as GestureKind, { ...asRecord(second), signal } as never);
+  }
+  if (command.op === 'performGlobalAction') {
+    if (!['back', 'home', 'recents', 'notifications'].includes(String(first))) throw new Error('global action is invalid');
+    return device.performGlobalAction(first as GlobalAction, { ...asRecord(second), signal });
+  }
+  if (command.op === 'launchApp') {
+    if (typeof first !== 'string') throw new Error('package name is invalid');
+    return device.launchApp(first, { ...asRecord(second), signal });
+  }
   if (command.op === 'snapshot') {
     const options = asRecord(first);
     const mode = options['mode'];
@@ -282,6 +302,23 @@ async function dispatchBridge(device: AndroidDevice, command: BridgeCommand, sig
     return device.snapshot({ ...(mode === undefined ? {} : { mode }), signal });
   }
   if (command.op === 'log') return null;
+  if (command.op === 'scrollUntilVisible') {
+    const containerOptions = locatorOptions(second);
+    const targetOptions = locatorOptions(fourth);
+    const scrollOptions = asRecord(fifth);
+    if (typeof third !== 'object' || third === null || Array.isArray(third)) throw new Error('target selector is required');
+    const container = createLocator(device, selectorSchema.parse(first) as Selector, containerOptions);
+    const target = createLocator(device, selectorSchema.parse(third) as Selector, targetOptions);
+    const direction = scrollOptions['direction'];
+    const maxSteps = scrollOptions['maxSteps'];
+    if (typeof direction !== 'string' || typeof maxSteps !== 'number') throw new Error('scroll options are invalid');
+    return container.scrollUntilVisible(target, {
+      direction: direction as ScrollDirection,
+      maxSteps,
+      signal,
+      ...(typeof scrollOptions['timeoutMs'] === 'number' ? { timeoutMs: scrollOptions['timeoutMs'] } : {}),
+    });
+  }
   const selector = selectorSchema.parse(first) as Selector;
   const options = locatorOptions(second);
   const locator = createLocator(device, selector, options);
@@ -290,6 +327,8 @@ async function dispatchBridge(device: AndroidDevice, command: BridgeCommand, sig
   if (command.op === 'bounds') return locator.bounds();
   if (command.op === 'state') return locator.state();
   if (command.op === 'click') return locator.click({ signal });
+  if (command.op === 'longClick') return locator.longClick({ signal });
+  if (command.op === 'clear') return locator.clear({ signal });
   if (command.op === 'fill') {
     if (typeof third !== 'string') throw new Error('fill requires a string value');
     return locator.fill(third, { signal });
@@ -326,7 +365,9 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 function isAction(operation: string): boolean {
-  return operation === 'click' || operation === 'fill' || operation === 'scroll';
+  return operation === 'click' || operation === 'longClick' || operation === 'clear' ||
+    operation === 'fill' || operation === 'scroll' ||
+    operation === 'performGesture' || operation === 'performGlobalAction';
 }
 
 function stringifyLogValue(value: unknown): string {

@@ -100,6 +100,44 @@ class TransportLifecycleTest {
         )
         assertEquals("192.168.1.20", selected?.hostAddress)
         assertNull(WifiAddressSelector.select(listOf("eth0" to InetAddress.getByName("10.0.0.3"))))
+        assertNull(WifiAddressSelector.select(emptyList()))
+    }
+
+    @Test
+    fun `wifi bind failure closes listener and never reports wifi active`() {
+        var starts = 0
+        var stops = 0
+        val lifecycle = TransportLifecycle(
+            start = { mode ->
+                starts++
+                if (mode is BindMode.Wifi) throw IllegalStateException("address disappeared")
+                endpoint(mode)
+            },
+            stop = { stops++ },
+        )
+        assertTrue(lifecycle.enable(accessibilityReady = true, notificationVisible = true))
+
+        assertFalse(lifecycle.enableWifi(InetAddress.getByName("192.168.1.20")))
+
+        assertEquals(2, starts)
+        assertEquals(2, stops)
+        assertFalse(lifecycle.state().remoteEnabled)
+        assertNull(lifecycle.state().endpoint)
+        assertEquals(TransportKind.NONE, lifecycle.state().transport)
+    }
+
+    @Test
+    fun `stopping remote control while wifi is active clears exposed endpoint`() {
+        val lifecycle = TransportLifecycle(start = { endpoint(it) }, stop = {})
+        assertTrue(lifecycle.enable(accessibilityReady = true, notificationVisible = true))
+        assertTrue(lifecycle.enableWifi(InetAddress.getByName("192.168.1.20")))
+        assertEquals(TransportKind.WIFI, lifecycle.state().transport)
+
+        lifecycle.disable()
+
+        assertFalse(lifecycle.state().remoteEnabled)
+        assertNull(lifecycle.state().endpoint)
+        assertEquals(TransportKind.NONE, lifecycle.state().transport)
     }
 
     @Test

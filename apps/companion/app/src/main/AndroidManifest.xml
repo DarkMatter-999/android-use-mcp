@@ -7,6 +7,10 @@
     <!-- Required for the explicitly authorized loopback TLS instrumentation probe. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <queries>
+        <package android:name="com.android.settings" />
+    </queries>
+
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"

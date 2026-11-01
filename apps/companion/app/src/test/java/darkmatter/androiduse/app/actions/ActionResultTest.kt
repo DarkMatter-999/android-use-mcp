@@ -608,6 +608,9 @@ class ActionResultTest {
         assertEquals(GestureKind.SWIPE, backend.lastGesture?.kind)
         assertEquals(500, backend.lastGesture?.endX)
         assertEquals(800, backend.lastGesture?.endY)
+        val loggedGesture = logStore.recent(1).single()
+        assertEquals(100, loggedGesture.gestureX)
+        assertEquals(200, loggedGesture.gestureY)
     }
 
     @Test

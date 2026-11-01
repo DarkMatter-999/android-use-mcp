@@ -49,6 +49,7 @@ describe('protocol constants and error codes', () => {
       'element.action',
       'gesture.perform',
       'screenshot.capture',
+      'app.launch',
       'rpc.cancel',
     ]);
     expect(measureFrameBytes('€')).toBe(3);

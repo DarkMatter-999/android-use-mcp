@@ -13,12 +13,18 @@ function fakeDependencies(overrides: Partial<McpToolDependencies> = {}): McpTool
     snapshot: vi.fn(async ({ mode }) => ({ mode, revision: 3, elements: [] })),
     execute: vi.fn(async () => ({ result: 4, logs: [], actions: [], durationMs: 1 })),
     disconnect: vi.fn(async () => ({ disconnected: true })),
+    screenshot: vi.fn(async () => ({
+      bytes: new Uint8Array([0xff, 0xd8, 0xff]), mimeType: 'image/jpeg' as const,
+      width: 10, height: 20, timestampMillis: 123, deviceId: 'device', windowId: 'window',
+    })),
+    openApp: vi.fn(async (packageName) => ({ launched: true, packageName })),
+    gesture: vi.fn(async (input) => ({ accepted: true, input })),
     ...overrides,
   };
 }
 
 describe('Android MCP server', () => {
-  it('initializes, lists exactly the core tools, delegates a call, and shuts down', async () => {
+    it('initializes, lists core tools, delegates a call, and shuts down', async () => {
     expect(createPublicServer).toBe(createAndroidMcpServer);
     const dependencies = fakeDependencies();
     const server = createAndroidMcpServer(dependencies);
@@ -30,7 +36,8 @@ describe('Android MCP server', () => {
     expect(client.getServerVersion()).toMatchObject({ name: 'android-use', version: '0.1.0' });
     const listed = await client.listTools();
     expect(listed.tools.map(({ name }) => name)).toEqual([
-      'android_status', 'android_pair', 'android_snapshot', 'android_execute', 'android_disconnect',
+      'android_status', 'android_pair', 'android_snapshot', 'android_screenshot',
+      'android_open_app', 'android_gesture', 'android_execute', 'android_disconnect',
     ]);
     expect(listed.tools.find(({ name }) => name === 'android_pair')?.inputSchema.required)
       .toEqual(['code', 'hostName']);
@@ -43,6 +50,56 @@ describe('Android MCP server', () => {
       content: [{ type: 'text', text: '{"sessionActive":false,"revision":3}' }],
     });
     expect(dependencies.status).toHaveBeenCalledTimes(1);
+
+    await client.callTool({ name: 'android_open_app', arguments: { packageName: 'com.android.settings' } });
+    await client.callTool({ name: 'android_gesture', arguments: { action: 'back' } });
+    expect(dependencies.openApp).toHaveBeenCalledWith('com.android.settings', 5_000);
+    expect(dependencies.gesture).toHaveBeenCalledWith({ action: 'back', timeoutMs: 5_000 });
+
+    await client.close();
+    await server.close();
+  });
+
+  it('returns screenshot image content with separate metadata and no-input schema', async () => {
+    const dependencies = fakeDependencies();
+    const server = createAndroidMcpServer(dependencies);
+    const client = new Client({ name: 'test-client', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const tool = (await client.listTools()).tools.find(({ name }) => name === 'android_screenshot');
+    expect(tool?.inputSchema.additionalProperties).toBe(false);
+    const result = await client.callTool({ name: 'android_screenshot', arguments: {} });
+    expect(result.content).toEqual([
+      { type: 'image', data: '/9j/', mimeType: 'image/jpeg' },
+      { type: 'text', text: JSON.stringify({ mimeType: 'image/jpeg', width: 10, height: 20, timestampMillis: 123, deviceId: 'device', windowId: 'window' }) },
+    ]);
+    expect(result.structuredContent).toEqual({
+      mimeType: 'image/jpeg', width: 10, height: 20, timestampMillis: 123, deviceId: 'device', windowId: 'window',
+    });
+    expect(JSON.stringify(result.content)).not.toContain('imageBase64');
+
+    await client.close();
+    await server.close();
+  });
+
+  it('returns a safe text-only MCP error when screenshot capture fails', async () => {
+    const dependencies = fakeDependencies({
+      screenshot: vi.fn(async () => { throw Object.assign(new Error('private image data'), {
+        code: 'INTERNAL', details: { reason: 'PROTECTED_CONTENT' },
+      }); }),
+    });
+    const server = createAndroidMcpServer(dependencies);
+    const client = new Client({ name: 'test-client', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const result = await client.callTool({ name: 'android_screenshot', arguments: {} });
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([{ type: 'text', text: 'The current screen is protected and cannot be captured.' }]);
+    expect(JSON.stringify(result)).not.toContain('private image data');
 
     await client.close();
     await server.close();

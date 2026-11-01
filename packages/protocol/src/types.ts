@@ -22,6 +22,7 @@ export const RPC_METHODS = [
   'element.action',
   'gesture.perform',
   'screenshot.capture',
+  'app.launch',
   RPC_CANCEL_METHOD,
 ] as const;
 

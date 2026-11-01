@@ -1,14 +1,15 @@
 # Android Use MCP
 
-Local stdio MCP server for the Android Use companion app. It adapts the authenticated Task 5 RPC transport and Task 6 TypeScript SDK/runtime into five tools:
+Local stdio MCP server for the Android Use companion app. It adapts the authenticated RPC transport and TypeScript SDK/runtime into eight tools:
 
 - `android_status` — read current device/session status.
 - `android_pair` — submit a pairing code and wait for approval on the phone.
 - `android_snapshot` — read a bounded accessibility snapshot (`full`, `compact`, or `actionable`).
+- `android_screenshot` — capture a bounded PNG/JPEG image via Android's accessibility screenshot API; returns image content and separate metadata.
+- `android_open_app` — launch an app from the phone-side allowlist (`com.android.settings` or Android Use itself).
+- `android_gesture` — perform a bounded `tap`, `longPress`, or `swipe`, or one supported global action (`back`, `home`, `recents`, `notifications`).
 - `android_execute` — execute bounded JavaScript in an isolated V8 runtime; multiple SDK operations can be batched into one call.
 - `android_disconnect` — close the current RPC connection.
-
-Screenshot capture, app launch, and other later POC tools are intentionally not included in this Task 7 package surface.
 
 ## Requirements
 
@@ -71,6 +72,8 @@ See [`examples/basic-automation/index.ts`](../../examples/basic-automation/index
 
 Each execution uses a fresh isolate with bounded time, heap, result bytes/depth, logs, and action trace. Node globals, filesystem, child processes, and unrestricted network are not exposed. A successful action dispatch is not the same as verifying the requested task postcondition; inspect the returned action result and take a fresh snapshot when needed.
 
+The isolated SDK also supports `longClick()`, `clear()`, bounded `scrollUntilVisible(target, {direction, maxSteps})` (maximum 20 steps), `android.performGesture(...)`, `android.performGlobalAction(...)`, and allowlisted `android.launchApp(...)`. Each operation is independently bounded and re-resolves selectors before acting. Actions are dispatch outcomes, not proof of task completion.
+
 ## Security and limitations
 
 - The CLI uses TLS and an exact device-certificate SHA-256 pin; pairing approval is performed on the phone.
@@ -78,5 +81,7 @@ Each execution uses a fresh isolate with bounded time, heap, result bytes/depth,
 - Tool errors are intentionally concise and omit raw transport exceptions and credentials.
 - JavaScript runs on the host, not on Android; Android operations go through the narrow SDK bridge and authenticated RPC.
 - The server connects lazily when a device tool is called. MCP initialization and tool listing do not contact the phone.
-- Screenshot/image support is deferred to Task 8 and is not exposed by this build.
+- Screenshot capture requires Android API 30+, the phone accessibility screenshot capability, an approved authenticated host, and an unprotected screen. Secure/protected content is rejected rather than replaced by a blank image; encoded image bytes are capped so the RPC frame remains below 2 MiB.
+- Wi-Fi listener exposure is a separate, explicit phone-side choice. The listener defaults to loopback/USB forwarding; pairing, TLS, certificate pinning, and phone approval remain required.
+- App launch is restricted by a fixed phone-side allowlist and Android package-visibility rules. Package availability and OS launch rejection are surfaced as safe typed errors.
 - Secure/protected screens, OEM accessibility behavior, and the availability of an active phone-side session may limit snapshots or actions.

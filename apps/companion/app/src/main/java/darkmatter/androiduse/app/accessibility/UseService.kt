@@ -42,6 +42,8 @@ import darkmatter.androiduse.app.actions.GestureResult
 import darkmatter.androiduse.app.actions.GestureSpec
 import darkmatter.androiduse.app.actions.GlobalAction
 import darkmatter.androiduse.app.actions.ScrollDirection
+import darkmatter.androiduse.app.actions.AppLaunchPolicy
+import darkmatter.androiduse.app.actions.AppLaunchValidation
 import darkmatter.androiduse.app.MainActivity
 import darkmatter.androiduse.app.R
 import darkmatter.androiduse.app.network.UiBounds
@@ -71,6 +73,13 @@ import darkmatter.androiduse.app.pairing.PairingManager
 import darkmatter.androiduse.app.pairing.SharedPreferencesPairingStore
 import darkmatter.androiduse.app.security.DeviceCertificate
 import darkmatter.androiduse.app.security.DeviceIdentity
+import darkmatter.androiduse.app.screenshots.ScreenshotCapture
+import darkmatter.androiduse.app.screenshots.ScreenshotResult
+import darkmatter.androiduse.app.network.ScreenshotRpcResult
+import darkmatter.androiduse.app.overlay.InspectorOverlay
+import darkmatter.androiduse.app.overlay.OverlayDisplay
+import darkmatter.androiduse.app.overlay.OverlayModel
+import darkmatter.androiduse.app.overlay.OverlayOptions
 
 /**
  * Accessibility service that exposes bounded, on-demand snapshots.
@@ -88,6 +97,7 @@ class UseService : AccessibilityService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val revision = AtomicInteger(0)
     private var debounceJob: Job? = null
+    private var overlayActionJob: Job? = null
 
     @Volatile
     private var connected: Boolean = false
@@ -121,12 +131,21 @@ class UseService : AccessibilityService() {
     @Volatile
     private var pairingChallenge: PairingChallenge? = null
 
+    @Volatile
+    private var inspectorOverlay: InspectorOverlay? = null
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
         transportLifecycle = TransportLifecycle(::startTransport, ::stopTransport)
         connected = true
         lastError = null
+        inspectorOverlay = runCatching { InspectorOverlay(this, onError = ::recordOverlayError) }.getOrNull()
+        configureOverlay()
+        overlayActionJob?.cancel()
+        overlayActionJob = scope.launch {
+            ActionLogStore.shared.recentEntries.collect { refreshOverlay() }
+        }
 
         if (!RemoteControlToggle.restoreAfterServiceRestart(ServicePreferences.isRemoteEnabled(this))) {
             ServicePreferences.setRemoteEnabled(this, false)
@@ -151,6 +170,10 @@ class UseService : AccessibilityService() {
     override fun onUnbind(intent: Intent?): Boolean {
         transportLifecycle?.onUnbind()
         connected = false
+        overlayActionJob?.cancel()
+        overlayActionJob = null
+        inspectorOverlay?.close()
+        inspectorOverlay = null
         instance = null
         // An unbound accessibility service cannot control anything. Fail closed
         // instead of leaving a stale "remote enabled" state or notification.
@@ -164,8 +187,12 @@ class UseService : AccessibilityService() {
     override fun onDestroy() {
         transportLifecycle?.onDestroy()
         debounceJob?.cancel()
+        overlayActionJob?.cancel()
+        overlayActionJob = null
         scope.cancel()
         connected = false
+        inspectorOverlay?.close()
+        inspectorOverlay = null
         instance = null
         ServicePreferences.setRemoteEnabled(this, false)
         activeHost = null
@@ -243,6 +270,7 @@ class UseService : AccessibilityService() {
         debounceJob = scope.launch {
             delay(INVALIDATION_DEBOUNCE_MILLIS)
             publishState()
+            refreshOverlay()
         }
     }
 
@@ -283,8 +311,49 @@ class UseService : AccessibilityService() {
             approvedHosts = pairing?.approvedHosts()?.map {
                 ApprovedHostState(it.hostId, it.hostName, it.fingerprintSha256)
             }.orEmpty(),
+            overlayOptions = ServicePreferences.overlayOptions(this),
         )
     }
+
+    private fun configureOverlay(options: OverlayOptions = ServicePreferences.overlayOptions(this)) {
+        inspectorOverlay?.setOptions(options)
+        if (options.inspector && connected) refreshOverlay()
+    }
+
+    private fun refreshOverlay() {
+        if (!connected) return
+        val overlay = inspectorOverlay ?: return
+        val options = ServicePreferences.overlayOptions(this)
+        if (!options.inspector) {
+            overlay.setOptions(options)
+            return
+        }
+        runCatching {
+            val snapshot = snapshot(SnapshotMode.FULL)
+            val metrics = resources.displayMetrics
+            val rotation = when (getSystemService(android.view.WindowManager::class.java)?.defaultDisplay?.rotation) {
+                android.view.Surface.ROTATION_90 -> 90
+                android.view.Surface.ROTATION_180 -> 180
+                android.view.Surface.ROTATION_270 -> 270
+                else -> 0
+            }
+            val frame = OverlayModel.from(
+                snapshot,
+                ActionLogStore.shared.recentEntries.value,
+                options,
+                OverlayDisplay(metrics.widthPixels, metrics.heightPixels, metrics.density, rotation),
+            )
+            overlay.setOptions(options)
+            overlay.update(frame)
+        }.onFailure { error -> recordOverlayError(error as? Exception ?: RuntimeException("overlay update failed")) }
+    }
+
+    private fun recordOverlayError(error: Exception) {
+        // Keep visualization failures in the existing redacted diagnostic channel.
+        lastError = "Inspector overlay unavailable (${error.javaClass.simpleName})"
+    }
+
+    private fun hideOverlayForCapture(): AutoCloseable = inspectorOverlay?.hideForCapture() ?: AutoCloseable { }
 
     private fun deviceId(): String = ServicePreferences.deviceId(this)
 
@@ -543,6 +612,12 @@ class UseService : AccessibilityService() {
             } ?: publishCompanionState(appContext)
         }
 
+        fun setOverlayOptions(context: Context, options: OverlayOptions) {
+            ServicePreferences.setOverlayOptions(context.applicationContext, options)
+            instance?.configureOverlay(options)
+            instance?.publishState() ?: publishCompanionState(context.applicationContext)
+        }
+
         private fun publishCompanionState(context: Context) {
             val current = instance
             if (current != null) {
@@ -559,6 +634,7 @@ class UseService : AccessibilityService() {
                 lastSnapshotRevision = current?.revision?.get()
                     ?: mutableState.value.lastSnapshotRevision,
                 lastError = current?.lastError,
+                overlayOptions = ServicePreferences.overlayOptions(context),
             )
         }
 
@@ -713,6 +789,88 @@ class UseService : AccessibilityService() {
     ): RpcResponse {
         return try {
             val result = when (request.method) {
+                "app.launch" -> {
+                    val packageName = (request.params["packageName"] as? kotlinx.serialization.json.JsonPrimitive)
+                        ?.takeIf { it.isString }?.content
+                        ?: return RpcResponse(PROTOCOL_VERSION, request.requestId, error = RpcError(RpcErrorCode.INVALID_MESSAGE, "packageName is required"))
+                    when (AppLaunchPolicy.validate(packageName)) {
+                        AppLaunchValidation.INVALID -> return RpcResponse(
+                            PROTOCOL_VERSION, request.requestId,
+                            error = RpcError(RpcErrorCode.INVALID_MESSAGE, "packageName is invalid"),
+                        )
+                        AppLaunchValidation.NOT_ALLOWLISTED -> return RpcResponse(
+                            PROTOCOL_VERSION, request.requestId,
+                            error = RpcError(
+                                RpcErrorCode.UNAUTHORIZED,
+                                "app package is not allowlisted on this phone",
+                                kotlinx.serialization.json.buildJsonObject { put("reason", kotlinx.serialization.json.JsonPrimitive("NOT_ALLOWLISTED")) },
+                            ),
+                        )
+                        AppLaunchValidation.ALLOWED -> Unit
+                    }
+                    val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+                        ?: return RpcResponse(
+                            PROTOCOL_VERSION, request.requestId,
+                            error = RpcError(
+                                RpcErrorCode.NOT_FOUND,
+                                "app package is unavailable or not visible",
+                                kotlinx.serialization.json.buildJsonObject { put("reason", kotlinx.serialization.json.JsonPrimitive("PACKAGE_UNAVAILABLE")) },
+                            ),
+                        )
+                    try {
+                        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        startActivity(launchIntent)
+                        kotlinx.serialization.json.buildJsonObject {
+                            put("launched", kotlinx.serialization.json.JsonPrimitive(true))
+                            put("packageName", kotlinx.serialization.json.JsonPrimitive(packageName))
+                        }
+                    } catch (_: Exception) {
+                        return RpcResponse(
+                            PROTOCOL_VERSION, request.requestId,
+                            error = RpcError(
+                                RpcErrorCode.INTERNAL,
+                                "app launch was rejected by Android",
+                                kotlinx.serialization.json.buildJsonObject {
+                                    put("reason", kotlinx.serialization.json.JsonPrimitive("LAUNCH_REJECTED"))
+                                },
+                            ),
+                        )
+                    }
+                }
+                "screenshot.capture" -> {
+                    val windowId = snapshot(SnapshotMode.ACTIONABLE_ONLY).windowId
+                    when (val capture = ScreenshotCapture.capture(this, deviceId(), windowId, ::hideOverlayForCapture)) {
+                        is ScreenshotResult.Success -> RpcProtocol.encodeScreenshot(
+                            ScreenshotRpcResult(
+                                imageBase64 = java.util.Base64.getEncoder().encodeToString(capture.bytes),
+                                mimeType = capture.mimeType,
+                                width = capture.width,
+                                height = capture.height,
+                                timestampMillis = capture.timestampMillis,
+                                deviceId = capture.deviceId,
+                                windowId = capture.windowId,
+                            ),
+                        )
+                        is ScreenshotResult.Failure -> return RpcResponse(
+                            PROTOCOL_VERSION,
+                            request.requestId,
+                            error = RpcError(
+                                if (capture.reason == darkmatter.androiduse.app.screenshots.ScreenshotFailure.UNSUPPORTED) RpcErrorCode.UNSUPPORTED
+                                else RpcErrorCode.INTERNAL,
+                                when (capture.reason) {
+                                    darkmatter.androiduse.app.screenshots.ScreenshotFailure.PROTECTED_CONTENT -> "screen content is protected"
+                                    darkmatter.androiduse.app.screenshots.ScreenshotFailure.UNSUPPORTED -> "screenshot capture is unsupported"
+                                    darkmatter.androiduse.app.screenshots.ScreenshotFailure.UNAVAILABLE -> "screenshot service is unavailable"
+                                    darkmatter.androiduse.app.screenshots.ScreenshotFailure.SIZE_LIMIT -> "screenshot exceeds the size limit"
+                                    darkmatter.androiduse.app.screenshots.ScreenshotFailure.CAPTURE_FAILED -> "screenshot capture failed"
+                                },
+                                details = kotlinx.serialization.json.buildJsonObject {
+                                    put("reason", kotlinx.serialization.json.JsonPrimitive(capture.reason.name))
+                                },
+                            ),
+                        )
+                    }
+                }
                 "snapshot.get" -> {
                     val modeName = (request.params["mode"] as? kotlinx.serialization.json.JsonPrimitive)
                         ?.contentOrNull?.uppercase() ?: SnapshotMode.FULL.name

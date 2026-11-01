@@ -194,6 +194,7 @@ class RpcProtocolTest {
                 "element.action",
                 "gesture.perform",
                 "screenshot.capture",
+                "app.launch",
                 "rpc.cancel",
             ),
             RpcProtocol.RPC_METHODS,

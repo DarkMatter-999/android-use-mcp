@@ -61,9 +61,6 @@ class CompanionRpcHandler(
             return success(request, deviceStatus(session))
         }
         if (request.method == "pairing.begin") return submitPairing(request, session)
-        if (request.method == "screenshot.capture") {
-            return error(request, RpcErrorCode.UNSUPPORTED, "screenshot capture is unsupported")
-        }
         if (request.method !in RpcProtocol.RPC_METHODS) {
             return error(request, RpcErrorCode.UNSUPPORTED, "unknown RPC method")
         }
