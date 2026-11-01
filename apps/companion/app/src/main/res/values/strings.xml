@@ -1,3 +1,9 @@
 <resources>
-    <string name="app_name">Android Use</string>
+    <string name="app_name">AndroidUse</string>
+    <string name="accessibility_service_label">AndroidUse device control</string>
+    <string name="accessibility_service_description">Allows an approved AndroidUse host on your computer to inspect the current screen and, in a later build, perform clicks, scrolling, and text entry while you have enabled this service in Android accessibility settings. AndroidUse does not bypass lock screens, authentication, secure windows, or app protections. Password values are redacted. Stop it at any time in the app or by turning off the service in Android settings.</string>
+    <string name="session_notification_channel">Remote control session</string>
+    <string name="session_notification_channel_description">Shown while AndroidUse remote control is enabled.</string>
+    <string name="session_notification_title">AndroidUse remote control is enabled</string>
+    <string name="session_notification_text">Remote control is on. An approved host can connect once pairing and transport are configured. Open AndroidUse to stop.</string>
 </resources>

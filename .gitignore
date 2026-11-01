@@ -1,6 +1,7 @@
 # Intentionally ignored: private plan/spec workspace and SDD run artifacts.
 /docs/superpowers/
 /.superpowers/
+/.opencode/subagents/subagent-registry.json
 
 # Node/TypeScript generated outputs and local state.
 node_modules/
