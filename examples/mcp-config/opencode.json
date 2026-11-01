@@ -1,0 +1,22 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "android-use": {
+        "type": "local",
+        "command": [
+          "node",
+          "./packages/mcp/dist/src/cli.js",
+          "--url",
+          "wss://<phone-ip>:47831/rpc",
+          "--device-certificate",
+          "/absolute/path/to/device-cert.pem",
+          "--device-certificate-pin",
+          "<sha256-certificate-pin>"
+        ],
+        "enabled": true,
+        "timeout": 10000
+      }
+    }
+  }
+}
