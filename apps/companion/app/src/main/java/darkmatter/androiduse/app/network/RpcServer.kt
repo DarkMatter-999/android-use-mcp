@@ -36,6 +36,23 @@ sealed class BindMode {
 
 data class RpcEndpoint(val address: InetAddress, val port: Int, val bindMode: BindMode)
 
+/** Serializes business-request admission against connection teardown. */
+internal class ConnectionDispatchGate {
+    private var open = true
+
+    @Synchronized
+    fun begin(admit: () -> Unit): Boolean {
+        if (!open) return false
+        admit()
+        return true
+    }
+
+    @Synchronized
+    fun close() {
+        open = false
+    }
+}
+
 data class RpcServerLimits(
     val maxConnections: Int = 8,
     val requestWorkers: Int = 8,
@@ -62,6 +79,8 @@ class RpcServer(
     private val pairingManager: PairingManager,
     private val handler: CompanionRpcHandler,
     private val limits: RpcServerLimits = RpcServerLimits(),
+    private val sessionChanged: (ControllerLease, HostRecord?) -> Unit = { _, _ -> },
+    private val sessionStopRequested: () -> Unit = {},
 ) : AutoCloseable {
     @Volatile
     var endpoint: RpcEndpoint? = null
@@ -179,15 +198,18 @@ class RpcServer(
 
     private fun serve(socket: SSLSocket) {
         var lease: ControllerLease? = null
+        val dispatchGate = ConnectionDispatchGate()
         try {
             socket.soTimeout = limits.handshakeTimeoutMillis
-            socket.startHandshake()
+            withAbsoluteSocketDeadline(socket, limits.handshakeTimeoutMillis) { socket.startHandshake() }
             val peer = socket.session.peerCertificates.firstOrNull() as? java.security.cert.X509Certificate
                 ?: throw java.security.cert.CertificateException("missing peer certificate")
             val session = SessionIdentity(peer)
             val input = java.io.BufferedInputStream(socket.inputStream)
             val output = socket.outputStream
-            val upgrade = WebSocketFrames.readUpgradeRequest(input, MAX_UPGRADE_HEADER_BYTES)
+            val upgrade = withAbsoluteSocketDeadline(socket, limits.handshakeTimeoutMillis) {
+                WebSocketFrames.readUpgradeRequest(input, MAX_UPGRADE_HEADER_BYTES)
+            }
             if (upgrade.path != RPC_PATH) throw WebSocketProtocolException("unknown WebSocket endpoint", 1008)
             WebSocketFrames.writeUpgradeResponse(output, upgrade.webSocketKey)
             socket.soTimeout = limits.idleTimeoutMillis
@@ -215,7 +237,7 @@ class RpcServer(
                         break
                     }
                     is WebSocketMessage.Text -> dispatch(
-                        socket, output, writeLock, inflight, leaseRef, session, message.value,
+                        socket, output, writeLock, inflight, leaseRef, dispatchGate, session, message.value,
                     )
                     is WebSocketMessage.Ping, is WebSocketMessage.Pong -> Unit
                 }
@@ -228,8 +250,12 @@ class RpcServer(
         } catch (_: Exception) {
             // The connection is closed on TLS, framing, timeout, or I/O errors; no sensitive data is logged.
         } finally {
+            dispatchGate.close()
             val connectionLease = lease ?: leases[socket]?.get()
-            if (connectionLease != null) pairingManager.releaseController(connectionLease.leaseId)
+            if (connectionLease != null) {
+                pairingManager.releaseController(connectionLease.leaseId)
+                sessionChanged(connectionLease, null)
+            }
             leases.remove(socket)
             sockets -= socket
             runCatching { socket.close() }
@@ -242,6 +268,7 @@ class RpcServer(
         writeLock: Any,
         inflight: AtomicInteger,
         leaseRef: AtomicReference<ControllerLease?>,
+        dispatchGate: ConnectionDispatchGate,
         session: SessionIdentity,
         text: String,
     ) {
@@ -262,17 +289,21 @@ class RpcServer(
                 try {
                     val business = request.method !in PRE_APPROVAL_METHODS
                     val approved = pairingManager.isApproved(session.fingerprintSha256)
-                    var lease = leaseRef.get()
-                    if (business && approved && lease == null) {
-                        val acquired = pairingManager.acquireController(session.fingerprintSha256)
-                        if (acquired != null) {
-                            if (leaseRef.compareAndSet(null, acquired)) lease = acquired
-                            else {
-                                pairingManager.releaseController(acquired.leaseId)
-                                lease = leaseRef.get()
+                    val admitted = dispatchGate.begin {
+                        if (business && approved && leaseRef.get() == null) {
+                            pairingManager.acquireController(session.fingerprintSha256)?.let { acquired ->
+                                if (leaseRef.compareAndSet(null, acquired)) {
+                                    pairingManager.approvedHosts().firstOrNull {
+                                        it.fingerprintSha256.equals(session.fingerprintSha256, ignoreCase = true)
+                                    }?.let { record -> sessionChanged(acquired, record) }
+                                } else {
+                                    pairingManager.releaseController(acquired.leaseId)
+                                }
                             }
                         }
                     }
+                    if (!admitted) return@execute
+                    val lease = leaseRef.get()
                     val response = if (business && approved && lease == null) {
                         RpcResponse(
                             PROTOCOL_VERSION,
@@ -280,13 +311,27 @@ class RpcServer(
                             error = RpcError(RpcErrorCode.PAIRING_REQUIRED, "another controller is active"),
                         )
                     } else {
+                        if (business && lease != null && !pairingManager.isControllerLeaseActive(lease)) return@execute
                         handler.handle(request, session)
                     }
                     if (business && lease != null && !pairingManager.isControllerLeaseActive(lease)) return@execute
                     val serialized = RpcProtocol.serialize(response)
-                    synchronized(writeLock) {
-                        if (business && lease != null && !pairingManager.isControllerLeaseActive(lease)) return@synchronized
+                    var responseCommitted = false
+                    val commitWrite = {
+                        synchronized(writeLock) {
                         withWriteTimeout(socket) { WebSocketFrames.writeText(output, serialized) }
+                        responseCommitted = true
+                        }
+                    }
+                    if (business && lease != null) {
+                        if (!pairingManager.commitControllerResponse(lease, commitWrite)) return@execute
+                    } else {
+                        commitWrite()
+                    }
+                    if (responseCommitted && request.method == "session.stop") {
+                        dispatchGate.close()
+                        sessionStopRequested()
+                        runCatching { socket.close() }
                     }
                 } catch (_: Exception) {
                     runCatching { socket.close() }
@@ -303,6 +348,20 @@ class RpcServer(
     private fun withWriteTimeout(socket: Socket, write: () -> Unit) {
         val scheduler = writeTimeouts ?: throw IllegalStateException("write timeout executor is unavailable")
         SocketWriteDeadline.run(socket, scheduler, limits.writeTimeoutMillis, write)
+    }
+
+    private fun <T> withAbsoluteSocketDeadline(socket: Socket, timeoutMillis: Int, operation: () -> T): T {
+        val scheduler = writeTimeouts ?: throw IllegalStateException("socket deadline executor is unavailable")
+        val deadline = scheduler.schedule(
+            { runCatching { socket.close() } },
+            timeoutMillis.toLong(),
+            TimeUnit.MILLISECONDS,
+        )
+        try {
+            return operation()
+        } finally {
+            deadline.cancel(false)
+        }
     }
 
     private fun namedThreadFactory(prefix: String): ThreadFactory {

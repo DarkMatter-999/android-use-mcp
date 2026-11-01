@@ -5,6 +5,8 @@ import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -15,6 +17,52 @@ import org.junit.Test
 class PairingManagerTest {
     private val hostId = "11111111-1111-4111-8111-111111111111"
     private val hostCertificate: X509Certificate by lazy { testHostCertificate() }
+
+    @Test
+    fun stoppingRemoteControlExpiresOutstandingChallengeAndDropsPendingHost() {
+        val manager = PairingManager(InMemoryPairingStore(), ZeroRandom())
+        val challenge = manager.begin()
+
+        manager.cancelPendingChallenge()
+
+        assertEquals(PairingStatus.EXPIRED, manager.approvalStatus(challenge.challengeId))
+        assertNull(manager.pendingHostInfo())
+    }
+
+    @Test
+    fun revocationCannotLinearizeBetweenFinalAuthorizationAndResponseCommit() {
+        val manager = PairingManager(InMemoryPairingStore())
+        val challenge = manager.begin()
+        manager.submit(challenge.code, hostId, "Test Host", hostCertificate)
+        manager.approve(hostId)
+        val lease = requireNotNull(manager.acquireController(fingerprint(hostCertificate)))
+        val commitEntered = CountDownLatch(1)
+        val allowCommit = CountDownLatch(1)
+        val revokeReturned = CountDownLatch(1)
+        val committed = AtomicBoolean(false)
+
+        val commitThread = Thread {
+            manager.commitControllerResponse(lease) {
+                commitEntered.countDown()
+                allowCommit.await()
+                committed.set(true)
+            }
+        }.apply { start() }
+        assertTrue(commitEntered.await(1, TimeUnit.SECONDS))
+        val revokeThread = Thread {
+            manager.revoke(hostId)
+            revokeReturned.countDown()
+        }.apply { start() }
+
+        assertFalse(revokeReturned.await(100, TimeUnit.MILLISECONDS))
+        allowCommit.countDown()
+        commitThread.join(1_000)
+        revokeThread.join(1_000)
+
+        assertTrue(committed.get())
+        assertTrue(revokeReturned.await(1, TimeUnit.SECONDS))
+        assertFalse(manager.isControllerLeaseActive(lease))
+    }
 
     @Test
     fun challengeUsesDeterministicEightCharacterUnambiguousCodeAndExpiresAfterFiveMinutes() {
@@ -46,11 +94,15 @@ class PairingManagerTest {
         assertFalse(manager.isApproved(fingerprint(hostCertificate)))
         assertNull(manager.acquireController(fingerprint(hostCertificate)))
         assertEquals(PairingStatus.WAITING, manager.approvalStatus(submission.challengeId))
+        assertEquals(PendingHostInfo(hostId, "Test Host", fingerprint(hostCertificate)), manager.pendingHostInfo())
+        assertEquals(emptyList<HostRecord>(), manager.approvedHosts())
 
         manager.approve(hostId)
 
         assertEquals(PairingStatus.APPROVED, manager.approvalStatus(submission.challengeId))
         assertTrue(manager.isApproved(fingerprint(hostCertificate)))
+        assertNull(manager.pendingHostInfo())
+        assertEquals("Test Host", manager.approvedHosts().single().hostName)
         val lease = manager.acquireController(fingerprint(hostCertificate))
         assertNotNull(lease)
         assertNull(manager.acquireController(fingerprint(hostCertificate)))

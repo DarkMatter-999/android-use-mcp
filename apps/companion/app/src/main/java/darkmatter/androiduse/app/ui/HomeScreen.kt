@@ -1,6 +1,8 @@
 package darkmatter.androiduse.app.ui
 
 import android.content.Intent
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -98,6 +100,15 @@ fun HomeScreen(viewModel: HomeViewModel) {
         },
         onAcknowledgeExplanation = viewModel::acknowledgeExplanation,
         onDisconnect = viewModel::disconnect,
+        onWifiChange = viewModel::setWifiEnabled,
+        onBeginPairing = viewModel::beginPairing,
+        onApproveHost = viewModel::approveHost,
+        onRejectHost = viewModel::rejectHost,
+        onRevokeHost = viewModel::revokeHost,
+        onCopyPublicValue = { label, value ->
+            context.getSystemService(ClipboardManager::class.java)
+                ?.setPrimaryClip(ClipData.newPlainText(label, value))
+        },
     )
 }
 
@@ -109,6 +120,12 @@ fun HomeContent(
     onRequestNotificationPermission: () -> Unit,
     onAcknowledgeExplanation: () -> Unit,
     onDisconnect: () -> Unit,
+    onWifiChange: (Boolean) -> Unit = {},
+    onBeginPairing: () -> Unit = {},
+    onApproveHost: (String) -> Unit = {},
+    onRejectHost: (String) -> Unit = {},
+    onRevokeHost: (String) -> Unit = {},
+    onCopyPublicValue: (String, String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     Surface(modifier = modifier.fillMaxSize()) {
@@ -130,13 +147,21 @@ fun HomeContent(
                 onRemoteControlChange = onRemoteControlChange,
                 onRequestNotificationPermission = onRequestNotificationPermission,
             )
-            ConnectionCard(state)
+            ConnectionCard(
+                state = state,
+                onWifiChange = onWifiChange,
+                onBeginPairing = onBeginPairing,
+                onApproveHost = onApproveHost,
+                onRejectHost = onRejectHost,
+                onRevokeHost = onRevokeHost,
+                onCopyPublicValue = onCopyPublicValue,
+            )
             RecentActionsCard(state.recentActions)
             StopControl(state, onDisconnect)
             Text(
                 text = "This build has a local accessibility action engine for clicks, text entry, " +
                     "scrolling, bounded gestures, and supported system actions. Authenticated " +
-                    "host transport is not implemented yet, and screenshots are unavailable.",
+                    "transport is available only through explicit pairing. Screenshots are unavailable.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -200,8 +225,8 @@ private fun FirstRunExplanation(onAcknowledgeExplanation: () -> Unit) {
     ) {
         Text(
             "The local action engine can inspect the current screen's accessibility tree and " +
-                "perform supported actions while this service is on. An approved computer host " +
-                "cannot connect until authenticated transport is implemented.",
+                "perform supported actions while this service is on. A computer host can connect " +
+                "only after you enable remote control and approve its certificate here.",
             style = MaterialTheme.typography.bodyMedium,
         )
         Text(
@@ -235,8 +260,8 @@ private fun RemoteControlCard(
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Text(
-                    "Only an approved host may connect. Turning this on does not open a " +
-                        "listener in this build.",
+                    "Enables a loopback TLS listener after the visible notification is active. " +
+                        "Wi-Fi exposure is a separate choice.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -265,17 +290,31 @@ private fun RemoteControlCard(
 }
 
 @Composable
-private fun ConnectionCard(state: HomeUiState) {
+private fun ConnectionCard(
+    state: HomeUiState,
+    onWifiChange: (Boolean) -> Unit,
+    onBeginPairing: () -> Unit,
+    onApproveHost: (String) -> Unit,
+    onRejectHost: (String) -> Unit,
+    onRevokeHost: (String) -> Unit,
+    onCopyPublicValue: (String, String) -> Unit,
+) {
     SectionCard(title = "Connection and session") {
         InfoRow(
             "Transport",
             when (state.transport) {
-                TransportKind.NONE -> "None configured"
+                TransportKind.NONE -> if (state.endpointAddress != null) "Loopback (local only)" else "None configured"
                 TransportKind.USB -> "USB (ADB forward)"
                 TransportKind.WIFI -> "Wi-Fi (local network)"
             },
         )
         InfoRow("Paired host", state.activeHost ?: "None")
+        InfoRow(
+            "Listener endpoint",
+            if (state.endpointAddress != null && state.endpointPort != null) {
+                "${state.endpointAddress}:${state.endpointPort}"
+            } else "Not listening",
+        )
         InfoRow(
             "Session",
             when {
@@ -284,12 +323,49 @@ private fun ConnectionCard(state: HomeUiState) {
                 else -> "Inactive"
             },
         )
-        Text(
-            "Wi-Fi and USB pairing arrive with the authenticated transport task. " +
-                "No network listener or device-control connection is active in this build.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Expose on current Wi-Fi", modifier = Modifier.weight(1f))
+            Switch(
+                checked = state.transport == TransportKind.WIFI,
+                onCheckedChange = onWifiChange,
+                enabled = state.remoteEnabled && state.endpointAddress != null,
+            )
+        }
+        state.transportError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        state.deviceFingerprintSha256?.let { fingerprint ->
+            Text("Phone certificate fingerprint", style = MaterialTheme.typography.titleSmall)
+            Text(fingerprint, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+            OutlinedButton(onClick = { onCopyPublicValue("AndroidUse fingerprint", fingerprint) }) {
+                Text("Copy fingerprint")
+            }
+        }
+        state.deviceCertificatePem?.let { certificate ->
+            OutlinedButton(onClick = { onCopyPublicValue("AndroidUse public certificate", certificate) }) {
+                Text("Copy public certificate")
+            }
+        }
+        if (state.remoteEnabled) {
+            OutlinedButton(onClick = onBeginPairing) { Text("Create pairing code") }
+        }
+        state.pairingCode?.let { code ->
+            Text("Pairing code (expires ${state.pairingExpiresAtMillis?.let { Date(it).toString() } ?: "soon"})")
+            Text(code, style = MaterialTheme.typography.headlineMedium, fontFamily = FontFamily.Monospace)
+        }
+        if (state.pendingHostId != null) {
+            HorizontalDivider()
+            Text("Pending host: ${state.pendingHostName ?: "Unnamed host"}", style = MaterialTheme.typography.titleSmall)
+            Text(state.pendingHostFingerprintSha256.orEmpty(), fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { onApproveHost(state.pendingHostId) }) { Text("Approve") }
+                OutlinedButton(onClick = { onRejectHost(state.pendingHostId) }) { Text("Reject") }
+            }
+        }
+        state.approvedHosts.forEach { host ->
+            HorizontalDivider()
+            Text(host.hostName, style = MaterialTheme.typography.titleSmall)
+            Text(host.fingerprintSha256, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+            OutlinedButton(onClick = { onRevokeHost(host.hostId) }) { Text("Revoke host") }
+        }
     }
 }
 

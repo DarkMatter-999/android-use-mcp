@@ -33,6 +33,8 @@ data class HostRecord(
     val approvedAtMillis: Long,
 )
 
+data class PendingHostInfo(val hostId: String, val hostName: String, val fingerprintSha256: String)
+
 data class ControllerLease(val leaseId: String, val fingerprintSha256: String)
 
 interface PairingStore {
@@ -139,6 +141,18 @@ class PairingManager(
         state.status
     }
 
+    fun pendingHostInfo(): PendingHostInfo? = synchronized(lock) {
+        pendingHost?.let { PendingHostInfo(it.hostId, it.hostName, it.fingerprintSha256) }
+    }
+
+    fun approvedHosts(): List<HostRecord> = store.load().toList()
+
+    fun cancelPendingChallenge() = synchronized(lock) {
+        challenges.values.filter { it.status == PairingStatus.WAITING }
+            .forEach { it.status = PairingStatus.EXPIRED }
+        pendingHost = null
+    }
+
     /** Local UI only. This method is intentionally not exposed through RPC handlers. */
     fun approve(hostId: String) = synchronized(lock) {
         val pending = pendingHost?.takeIf { it.hostId == hostId } ?: return@synchronized
@@ -200,6 +214,15 @@ class PairingManager(
         activeLease == lease && store.load().any {
             constantTimeEquals(it.fingerprintSha256, lease.fingerprintSha256)
         }
+    }
+
+    /** Holds the authorization lock through response commitment so revoke cannot overtake a write. */
+    fun commitControllerResponse(lease: ControllerLease, commit: () -> Unit): Boolean = synchronized(lock) {
+        if (activeLease != lease || store.load().none {
+                constantTimeEquals(it.fingerprintSha256, lease.fingerprintSha256)
+            }) return@synchronized false
+        commit()
+        true
     }
 
     private fun validHost(

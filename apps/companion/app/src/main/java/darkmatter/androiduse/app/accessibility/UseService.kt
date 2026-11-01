@@ -32,6 +32,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import darkmatter.androiduse.app.actions.ActionBackend
+import darkmatter.androiduse.app.actions.ActionCancellation
+import darkmatter.androiduse.app.actions.ActionRequest
 import darkmatter.androiduse.app.actions.ActionExecutor
 import darkmatter.androiduse.app.actions.ActionLogStore
 import darkmatter.androiduse.app.actions.ActionNode
@@ -51,6 +53,24 @@ import darkmatter.androiduse.app.selectors.NodePathStaleException
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import darkmatter.androiduse.app.network.BindMode
+import darkmatter.androiduse.app.network.CompanionRpcHandler
+import darkmatter.androiduse.app.network.DeviceTls
+import darkmatter.androiduse.app.network.RpcEndpoint
+import darkmatter.androiduse.app.network.RpcError
+import darkmatter.androiduse.app.network.RpcErrorCode
+import darkmatter.androiduse.app.network.RpcResponse
+import darkmatter.androiduse.app.network.RpcProtocol
+import darkmatter.androiduse.app.network.PROTOCOL_VERSION
+import darkmatter.androiduse.app.network.RpcServer
+import darkmatter.androiduse.app.network.RpcRequest
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.decodeFromJsonElement
+import darkmatter.androiduse.app.pairing.PairingChallenge
+import darkmatter.androiduse.app.pairing.PairingManager
+import darkmatter.androiduse.app.pairing.SharedPreferencesPairingStore
+import darkmatter.androiduse.app.security.DeviceCertificate
+import darkmatter.androiduse.app.security.DeviceIdentity
 
 /**
  * Accessibility service that exposes bounded, on-demand snapshots.
@@ -76,6 +96,11 @@ class UseService : AccessibilityService() {
     private var activeHost: String? = null
 
     @Volatile
+    private var activeHostFingerprint: String? = null
+
+    private val controllerLeaseState = ControllerLeaseState()
+
+    @Volatile
     private var transport: TransportKind = TransportKind.NONE
 
     @Volatile
@@ -84,17 +109,28 @@ class UseService : AccessibilityService() {
     @Volatile
     private var lastError: String? = null
 
+    @Volatile
+    private var rpcServer: RpcServer? = null
+
+    @Volatile
+    private var pairingManager: PairingManager? = null
+
+    @Volatile
+    private var deviceCertificate: DeviceCertificate? = null
+
+    @Volatile
+    private var pairingChallenge: PairingChallenge? = null
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        transportLifecycle = TransportLifecycle(::startTransport, ::stopTransport)
         connected = true
         lastError = null
 
-        val remote = ServicePreferences.isRemoteEnabled(this)
-        if (remote && !SessionNotification.show(this)) {
-            // Without the persistent notification the user cannot see that remote
-            // control is active, so fail closed and require a new explicit toggle.
+        if (!RemoteControlToggle.restoreAfterServiceRestart(ServicePreferences.isRemoteEnabled(this))) {
             ServicePreferences.setRemoteEnabled(this, false)
+            SessionNotification.cancel(this)
         }
         publishState()
     }
@@ -113,6 +149,7 @@ class UseService : AccessibilityService() {
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
+        transportLifecycle?.onUnbind()
         connected = false
         instance = null
         // An unbound accessibility service cannot control anything. Fail closed
@@ -125,12 +162,14 @@ class UseService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        transportLifecycle?.onDestroy()
         debounceJob?.cancel()
         scope.cancel()
         connected = false
         instance = null
         ServicePreferences.setRemoteEnabled(this, false)
         activeHost = null
+        activeHostFingerprint = null
         transport = TransportKind.NONE
         sessionActive = false
         SessionNotification.cancel(this)
@@ -170,8 +209,17 @@ class UseService : AccessibilityService() {
     }
 
     /** Task 5 calls this once an authenticated host/session exists. */
-    fun updateSession(host: String?, transport: TransportKind, active: Boolean) {
+    fun updateSession(
+        host: String?,
+        transport: TransportKind,
+        active: Boolean,
+        fingerprintSha256: String? = null,
+        leaseId: String? = null,
+    ) {
+        if (leaseId == null) controllerLeaseState.clear()
+        else if (!controllerLeaseState.update(leaseId, active)) return
         activeHost = host
+        activeHostFingerprint = fingerprintSha256.takeIf { active }
         this.transport = transport
         sessionActive = active
         publishState()
@@ -199,21 +247,42 @@ class UseService : AccessibilityService() {
     }
 
     private fun clearSession() {
+        controllerLeaseState.clear()
         activeHost = null
+        activeHostFingerprint = null
         transport = TransportKind.NONE
         sessionActive = false
     }
 
     private fun publishState() {
+        val pairing = pairingManager
+        val certificate = deviceCertificate
+        val endpoint = rpcServer?.endpoint
+        val pending = pairing?.pendingHostInfo()
         mutableState.value = ServiceState(
             enabled = isAccessibilityServiceEnabled(this) || connected,
             connected = connected,
             remoteEnabled = ServicePreferences.isRemoteEnabled(this),
             activeHost = activeHost,
-            transport = transport,
+            transport = endpoint?.let {
+                if (it.bindMode is BindMode.Wifi) TransportKind.WIFI else TransportKind.NONE
+            } ?: transport,
             sessionActive = sessionActive,
             lastSnapshotRevision = revision.get(),
             lastError = lastError,
+            endpoint = endpoint,
+            deviceFingerprintSha256 = certificate?.fingerprintSha256,
+            deviceCertificatePem = certificate?.certificatePem,
+            pairingCode = pairingChallenge?.code?.takeIf {
+                pairingChallenge?.let { challenge -> System.currentTimeMillis() < challenge.expiresAtMillis } == true
+            },
+            pairingExpiresAtMillis = pairingChallenge?.expiresAtMillis,
+            pendingHostId = pending?.hostId,
+            pendingHostName = pending?.hostName,
+            pendingHostFingerprintSha256 = pending?.fingerprintSha256,
+            approvedHosts = pairing?.approvedHosts()?.map {
+                ApprovedHostState(it.hostId, it.hostName, it.fingerprintSha256)
+            }.orEmpty(),
         )
     }
 
@@ -419,6 +488,9 @@ class UseService : AccessibilityService() {
         @Volatile
         private var instance: UseService? = null
 
+        @Volatile
+        private var transportLifecycle: TransportLifecycle? = null
+
         /** Recomputes enabled/connected state from Android settings and binding. */
         fun refreshState(context: Context) {
             publishCompanionState(context.applicationContext)
@@ -440,12 +512,20 @@ class UseService : AccessibilityService() {
                 persistRemoteEnabled = { value ->
                     ServicePreferences.setRemoteEnabled(appContext, value)
                 },
-                postNotification = { SessionNotification.show(appContext) },
+                postNotification = {
+                    val visible = SessionNotification.show(appContext)
+                    visible && (!enabled || current?.transportLifecycleEnable() == true)
+                },
                 cancelNotification = { SessionNotification.cancel(appContext) },
             )
 
-            if (accepted && !enabled) {
+            if (accepted && enabled) {
+                current?.lastError = null
+            } else if (accepted) {
+                current?.transportLifecycleDisable()
                 current?.clearSession()
+            } else if (enabled) {
+                current?.setTransportError("Remote listener failed to start; remote control remains off")
             }
             current?.publishState() ?: publishCompanionState(appContext)
             return accepted
@@ -457,6 +537,7 @@ class UseService : AccessibilityService() {
             ServicePreferences.setRemoteEnabled(appContext, false)
             SessionNotification.cancel(appContext)
             instance?.let { service ->
+                service.transportLifecycleDisable()
                 service.clearSession()
                 service.publishState()
             } ?: publishCompanionState(appContext)
@@ -464,6 +545,10 @@ class UseService : AccessibilityService() {
 
         private fun publishCompanionState(context: Context) {
             val current = instance
+            if (current != null) {
+                current.publishState()
+                return
+            }
             mutableState.value = ServiceState(
                 enabled = isAccessibilityServiceEnabled(context),
                 connected = current?.connected == true,
@@ -474,6 +559,197 @@ class UseService : AccessibilityService() {
                 lastSnapshotRevision = current?.revision?.get()
                     ?: mutableState.value.lastSnapshotRevision,
                 lastError = current?.lastError,
+            )
+        }
+
+        fun setWifiEnabled(context: Context, enabled: Boolean): Boolean {
+            val service = instance ?: return false
+            val accepted = if (enabled) {
+                val address = activeWifiAddress() ?: return false
+                service.transportLifecycleWifi(address)
+            } else {
+                service.transportLifecycleLoopback()
+            }
+            if (!accepted) {
+                service.transportLifecycleDisable()
+                ServicePreferences.setRemoteEnabled(context.applicationContext, false)
+                SessionNotification.cancel(context.applicationContext)
+                service.clearSession()
+                service.setTransportError("Listener could not be restarted; remote control was stopped")
+            }
+            service.publishState()
+            return accepted
+        }
+
+        fun beginPairing(context: Context): PairingChallenge? = instance?.let { service ->
+            if (!ServicePreferences.isRemoteEnabled(context.applicationContext)) return@let null
+            service.pairingManager?.begin()?.also {
+                service.pairingChallenge = it
+                service.publishState()
+            }
+        }
+
+        fun approveHost(hostId: String) = instance?.let { service ->
+            service.pairingManager?.approve(hostId)
+            service.publishState()
+        }
+
+        fun rejectHost(hostId: String) = instance?.let { service ->
+            service.pairingManager?.reject(hostId)
+            service.publishState()
+        }
+
+        fun revokeHost(hostId: String) = instance?.let { service ->
+            val revoked = service.pairingManager?.approvedHosts()?.firstOrNull { it.hostId == hostId }
+            service.pairingManager?.revoke(hostId)
+            if (revoked?.fingerprintSha256 == service.activeHostFingerprint) {
+                service.updateSession(null, TransportKind.NONE, false)
+            }
+            service.publishState()
+        }
+
+        private fun activeWifiAddress(): java.net.InetAddress? {
+            return runCatching {
+                val interfaces = java.net.NetworkInterface.getNetworkInterfaces() ?: return null
+                val candidates = java.util.Collections.list(interfaces)
+                    .filter { networkInterface -> runCatching { networkInterface.isUp && !networkInterface.isLoopback }.getOrDefault(false) }
+                    .flatMap { networkInterface ->
+                        java.util.Collections.list(networkInterface.inetAddresses).map { networkInterface.name to it }
+                    }
+                WifiAddressSelector.select(candidates)
+            }.getOrNull()
+        }
+    }
+
+    private fun transportLifecycleEnable(): Boolean = transportLifecycle?.enable(
+        accessibilityReady = connected && isAccessibilityServiceEnabled(this),
+        notificationVisible = SessionNotification.canPost(this) && ServicePreferences.isRemoteEnabled(this),
+    ) == true
+
+    private fun transportLifecycleDisable() = transportLifecycle?.disable()
+
+    private fun transportLifecycleWifi(address: java.net.InetAddress): Boolean = transportLifecycle?.enableWifi(address) == true
+
+    private fun transportLifecycleLoopback(): Boolean = transportLifecycle?.enableLoopback() == true
+
+    private fun startTransport(mode: BindMode): RpcEndpoint {
+        val certificate = DeviceIdentity.getOrCreate(this)
+        val pairing = pairingManager ?: PairingManager(SharedPreferencesPairingStore(this)).also { pairingManager = it }
+        val cancellations = java.util.concurrent.ConcurrentHashMap<String, ActionCancellation>()
+        val executor = actionExecutor()
+        val handler = CompanionRpcHandler(
+            pairingManager = pairing,
+            deviceStatus = { session ->
+                kotlinx.serialization.json.buildJsonObject {
+                    put("deviceFingerprintSha256", kotlinx.serialization.json.JsonPrimitive(certificate.fingerprintSha256))
+                    put("activeHost", kotlinx.serialization.json.JsonPrimitive(activeHost ?: ""))
+                    put("sessionActive", kotlinx.serialization.json.JsonPrimitive(sessionActive))
+                    put("listenerPort", kotlinx.serialization.json.JsonPrimitive(rpcServer?.endpoint?.port ?: 0))
+                }
+            },
+            businessDispatcher = { request, _ ->
+                dispatchRemoteRequest(request, executor, cancellations)
+            },
+            cancelAction = { requestId -> cancellations[requestId]?.let { it.cancel(); true } ?: false },
+            pairingChanged = { publishState() },
+        )
+        val server = RpcServer(
+            sslContext = DeviceTls.serverContext(certificate),
+            pairingManager = pairing,
+            handler = handler,
+            sessionChanged = { lease, host ->
+                val activeMode = rpcServer?.endpoint?.bindMode
+                updateSession(
+                    host?.hostName,
+                    if (activeMode is BindMode.Wifi) TransportKind.WIFI else TransportKind.NONE,
+                    host != null,
+                    host?.fingerprintSha256,
+                    lease.leaseId,
+                )
+            },
+            sessionStopRequested = { stopRemoteFromController() },
+        )
+        return try {
+            server.start(mode).also {
+                deviceCertificate = certificate
+                rpcServer = server
+                transport = if (mode is BindMode.Wifi) TransportKind.WIFI else TransportKind.NONE
+                lastError = null
+            }
+        } catch (error: Exception) {
+            server.close()
+            throw error
+        }
+    }
+
+    private fun stopTransport() {
+        rpcServer?.close()
+        rpcServer = null
+        pairingManager?.cancelPendingChallenge()
+        pairingChallenge = null
+        activeHost = null
+        activeHostFingerprint = null
+        controllerLeaseState.clear()
+        transport = TransportKind.NONE
+        sessionActive = false
+    }
+
+    private fun stopRemoteFromController() {
+        ServicePreferences.setRemoteEnabled(this, false)
+        SessionNotification.cancel(this)
+        transportLifecycleDisable()
+        clearSession()
+        publishState()
+    }
+
+    private fun setTransportError(message: String) {
+        lastError = message
+    }
+
+    private fun dispatchRemoteRequest(
+        request: RpcRequest,
+        executor: ActionExecutor,
+        cancellations: java.util.concurrent.ConcurrentHashMap<String, ActionCancellation>,
+    ): RpcResponse {
+        return try {
+            val result = when (request.method) {
+                "snapshot.get" -> {
+                    val modeName = (request.params["mode"] as? kotlinx.serialization.json.JsonPrimitive)
+                        ?.contentOrNull?.uppercase() ?: SnapshotMode.FULL.name
+                    val mode = runCatching { SnapshotMode.valueOf(modeName) }.getOrDefault(SnapshotMode.FULL)
+                    RpcProtocol.encodeSnapshot(snapshot(mode))
+                }
+                "element.action", "gesture.perform" -> {
+                    val action = RpcProtocol.json.decodeFromJsonElement<ActionRequest>(request.params)
+                    val token = ActionCancellation()
+                    if (cancellations.putIfAbsent(request.requestId, token) != null) {
+                        throw IllegalArgumentException("duplicate request id")
+                    }
+                    try {
+                        RpcProtocol.encodeActionResult(executor.execute(action, token))
+                    } finally {
+                        cancellations.remove(request.requestId, token)
+                    }
+                }
+                "session.start", "session.stop" -> kotlinx.serialization.json.JsonObject(emptyMap())
+                else -> return RpcResponse(
+                    PROTOCOL_VERSION,
+                    request.requestId,
+                    error = RpcError(RpcErrorCode.UNSUPPORTED, "RPC method is not supported by this companion"),
+                )
+            }
+            RpcResponse(PROTOCOL_VERSION, request.requestId, result = result)
+        } catch (_: kotlinx.serialization.SerializationException) {
+            RpcResponse(
+                PROTOCOL_VERSION,
+                request.requestId,
+                error = RpcError(RpcErrorCode.INVALID_MESSAGE, "request parameters were invalid"),
+            )
+        } catch (_: Exception) {
+            RpcResponse(
+                PROTOCOL_VERSION,
+                request.requestId,
+                error = RpcError(RpcErrorCode.INTERNAL, "request failed"),
             )
         }
     }

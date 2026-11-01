@@ -41,6 +41,7 @@ class CompanionRpcHandler(
     private val businessDispatcher: (RpcRequest, SessionIdentity) -> RpcResponse,
     val cancellationRegistry: ActionCancellationRegistry = ActionCancellationRegistry(),
     private val cancelAction: ((String) -> Boolean)? = null,
+    private val pairingChanged: () -> Unit = {},
 ) {
     fun handle(request: RpcRequest, session: SessionIdentity): RpcResponse {
         if (request.method == "pairing.approve" || request.method == "pairing.revoke") {
@@ -86,6 +87,7 @@ class CompanionRpcHandler(
             ?: return error(request, RpcErrorCode.INVALID_MESSAGE, "hostName is required")
         return try {
             val submitted = pairingManager.submit(code, hostId, hostName, session.peerCertificate)
+            pairingChanged()
             success(request, buildJsonObject {
                 put("challengeId", submitted.challengeId)
                 put("status", submitted.status.name)

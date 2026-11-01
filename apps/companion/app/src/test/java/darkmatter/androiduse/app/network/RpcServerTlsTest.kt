@@ -10,6 +10,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import darkmatter.androiduse.app.pairing.HostRecord
+import darkmatter.androiduse.app.pairing.ControllerLease
 import darkmatter.androiduse.app.pairing.PairingManager
 import darkmatter.androiduse.app.pairing.PairingStore
 import java.io.ByteArrayOutputStream
@@ -18,6 +19,7 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
@@ -69,6 +71,98 @@ class RpcServerTlsTest {
                     assertEquals("ok", (response as RpcParseResult.Success).value.result?.toString()?.trim('"'))
                 }
         } finally {
+            server.close()
+        }
+    }
+
+    @Test
+    fun approvedControllerLifecycleIsReportedAndClearedOnSocketClose() {
+        val manager = newPairingManager()
+        val challenge = manager.begin()
+        manager.submit(challenge.code, HOST_ID, "Test Host", clientIdentity.certificate)
+        manager.approve(HOST_ID)
+        val connected = CountDownLatch(1)
+        val disconnected = CountDownLatch(1)
+        val observed = mutableListOf<String?>()
+        lateinit var server: RpcServer
+        server = newServer(
+            serverIdentity.sslContext(clientIdentity.certificate, includeClientIdentity = true),
+            manager = manager,
+            sessionStopRequested = { server.stop() },
+            sessionChanged = { _, record ->
+                synchronized(observed) { observed += record?.hostName }
+                if (record == null) disconnected.countDown() else connected.countDown()
+            },
+        )
+        val endpoint = server.start(BindMode.Loopback)
+        try {
+            val socket = connectWebSocket(endpoint)
+            socket.outputStream.write(maskedTextFrame(RpcProtocol.serialize(
+                RpcRequest(PROTOCOL_VERSION, REQUEST_ID, "session.start", JsonObject(emptyMap())),
+            )))
+            socket.outputStream.flush()
+            assertTrue(connected.await(SOCKET_TIMEOUT_MILLIS.toLong(), TimeUnit.MILLISECONDS))
+            assertEquals("Test Host", synchronized(observed) { observed.first() })
+            assertTrue(RpcProtocol.parseResponse(readServerText(socket.inputStream)) is RpcParseResult.Success)
+            socket.outputStream.write(maskedTextFrame(RpcProtocol.serialize(
+                RpcRequest(PROTOCOL_VERSION, "22222222-2222-4222-8222-222222222222", "session.stop", JsonObject(emptyMap())),
+            )))
+            socket.outputStream.flush()
+            assertTrue(RpcProtocol.parseResponse(readServerText(socket.inputStream)) is RpcParseResult.Success)
+            assertTrue(disconnected.await(SOCKET_TIMEOUT_MILLIS.toLong(), TimeUnit.MILLISECONDS))
+            assertEquals(null, server.endpoint)
+            assertTrue(runCatching { connectWebSocket(endpoint) }.isFailure)
+            socket.close()
+        } finally {
+            server.close()
+        }
+    }
+
+    @Test
+    fun queuedBusinessRequestDoesNotDispatchAfterConnectionClose() {
+        val manager = newPairingManager()
+        val challenge = manager.begin()
+        manager.submit(challenge.code, HOST_ID, "Test Host", clientIdentity.certificate)
+        manager.approve(HOST_ID)
+        val firstEntered = CountDownLatch(1)
+        val releaseFirst = CountDownLatch(1)
+        val secondEntered = CountDownLatch(1)
+        val dispatches = AtomicInteger()
+        val server = newServer(
+            serverIdentity.sslContext(clientIdentity.certificate, includeClientIdentity = true),
+            limits = RpcServerLimits(requestWorkers = 1, requestQueueCapacity = 2, idleTimeoutMillis = 2_000),
+            manager = manager,
+            businessDispatcher = { request, _ ->
+                if (dispatches.incrementAndGet() == 1) {
+                    firstEntered.countDown()
+                    check(releaseFirst.await(SOCKET_TIMEOUT_MILLIS.toLong(), TimeUnit.MILLISECONDS))
+                } else {
+                    secondEntered.countDown()
+                }
+                RpcResponse(PROTOCOL_VERSION, request.requestId)
+            },
+        )
+        val endpoint = server.start(BindMode.Loopback)
+        try {
+            val socket = connectWebSocket(endpoint)
+            socket.outputStream.write(maskedTextFrame(RpcProtocol.serialize(
+                RpcRequest(PROTOCOL_VERSION, REQUEST_ID, "session.start", JsonObject(emptyMap())),
+            )))
+            socket.outputStream.flush()
+            assertTrue(firstEntered.await(SOCKET_TIMEOUT_MILLIS.toLong(), TimeUnit.MILLISECONDS))
+            socket.outputStream.write(maskedTextFrame(RpcProtocol.serialize(
+                RpcRequest(PROTOCOL_VERSION, "22222222-2222-4222-8222-222222222222", "session.start", JsonObject(emptyMap())),
+            )))
+            socket.outputStream.flush()
+            socket.outputStream.write(byteArrayOf(0x88.toByte(), 0x80.toByte(), 1, 2, 3, 4))
+            socket.outputStream.flush()
+            readServerClose(socket.inputStream)
+            releaseFirst.countDown()
+            assertFalse(secondEntered.await(300, TimeUnit.MILLISECONDS))
+            assertEquals(1, dispatches.get())
+            socket.close()
+        } finally {
+            releaseFirst.countDown()
             server.close()
         }
     }
@@ -185,6 +279,40 @@ class RpcServerTlsTest {
                 slowUpgrade.outputStream.write("GET /rpc HTTP/1.1\r\n".toByteArray(Charsets.US_ASCII))
                 slowUpgrade.outputStream.flush()
                 readUntilEof(slowUpgrade.inputStream)
+            }
+        } finally {
+            server.close()
+        }
+    }
+
+    @Test
+    fun tricklingHttpUpgradeCannotExtendTheAbsoluteUpgradeDeadline() {
+        val server = newServer(
+            serverIdentity.sslContext(clientIdentity.certificate, includeClientIdentity = true),
+            RpcServerLimits(handshakeTimeoutMillis = 250, idleTimeoutMillis = 3_000),
+        )
+        val endpoint = server.start(BindMode.Loopback)
+        try {
+            (clientIdentity.sslContext(serverIdentity.certificate, includeClientIdentity = true)
+                .socketFactory.createSocket() as SSLSocket).use { socket ->
+                socket.connect(InetSocketAddress(endpoint.address, endpoint.port), SOCKET_TIMEOUT_MILLIS)
+                socket.enabledProtocols = arrayOf("TLSv1.3")
+                socket.soTimeout = 4_000
+                socket.startHandshake()
+                val startedAt = System.nanoTime()
+                val trickle = Thread {
+                    "GET /rpc HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n".forEach { character ->
+                        runCatching {
+                            socket.outputStream.write(character.code)
+                            socket.outputStream.flush()
+                            Thread.sleep(60)
+                        }
+                    }
+                }.apply { start() }
+                readUntilEof(socket.inputStream)
+                val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)
+                trickle.join(1_000)
+                assertTrue("upgrade deadline took $elapsedMillis ms", elapsedMillis < 800)
             }
         } finally {
             server.close()
@@ -374,13 +502,15 @@ class RpcServerTlsTest {
         businessDispatcher: (RpcRequest, SessionIdentity) -> RpcResponse = { request, _ ->
             RpcResponse(PROTOCOL_VERSION, request.requestId)
         },
+        sessionChanged: (ControllerLease, HostRecord?) -> Unit = { _, _ -> },
+        sessionStopRequested: () -> Unit = {},
     ): RpcServer {
         val handler = CompanionRpcHandler(
             manager,
             { JsonPrimitive("ok") },
             businessDispatcher = businessDispatcher,
         )
-        return RpcServer(context, manager, handler, limits)
+        return RpcServer(context, manager, handler, limits, sessionChanged, sessionStopRequested)
     }
 
     private fun newPairingManager(): PairingManager {
@@ -446,6 +576,14 @@ class RpcServerTlsTest {
         }
         return ByteArray(length) { input.read().also { check(it >= 0) }.toByte() }
             .toString(Charsets.UTF_8)
+    }
+
+    private fun readServerClose(input: InputStream) {
+        val first = input.read()
+        val second = input.read()
+        assertEquals(0x88, first)
+        assertTrue(second >= 0 && second and 0x80 == 0)
+        repeat(second and 0x7f) { assertTrue(input.read() >= 0) }
     }
 
     private fun readUntilEof(input: InputStream): Int {

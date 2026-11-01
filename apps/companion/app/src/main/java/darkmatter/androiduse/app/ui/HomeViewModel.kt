@@ -11,10 +11,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import darkmatter.androiduse.app.accessibility.ServicePreferences
 import darkmatter.androiduse.app.accessibility.ServiceState
 import darkmatter.androiduse.app.accessibility.SessionNotification
 import darkmatter.androiduse.app.accessibility.TransportKind
+import darkmatter.androiduse.app.accessibility.ApprovedHostState
 import darkmatter.androiduse.app.accessibility.UseService
 import darkmatter.androiduse.app.accessibility.isAccessibilityServiceEnabled
 import darkmatter.androiduse.app.actions.ActionLogEntry
@@ -34,7 +36,31 @@ data class HomeUiState(
     val firstRunExplanationVisible: Boolean,
     val notificationPermissionMissing: Boolean,
     val statusMessage: String,
-)
+    val endpointAddress: String? = null,
+    val endpointPort: Int? = null,
+    val deviceFingerprintSha256: String? = null,
+    val deviceCertificatePem: String? = null,
+    val pairingCode: String? = null,
+    val pairingExpiresAtMillis: Long? = null,
+    val pendingHostId: String? = null,
+    val pendingHostName: String? = null,
+    val pendingHostFingerprintSha256: String? = null,
+    val approvedHosts: List<ApprovedHostState> = emptyList(),
+    val transportError: String? = null,
+) {
+    override fun toString(): String = "HomeUiState(deviceModel=$deviceModel, apiLevel=$apiLevel, " +
+        "accessibilityEnabled=$accessibilityEnabled, accessibilityConnected=$accessibilityConnected, " +
+        "remoteEnabled=$remoteEnabled, activeHost=$activeHost, transport=$transport, " +
+        "sessionActive=$sessionActive, firstRunExplanationVisible=$firstRunExplanationVisible, " +
+        "notificationPermissionMissing=$notificationPermissionMissing, statusMessage=$statusMessage, " +
+        "endpointAddress=$endpointAddress, endpointPort=$endpointPort, approvedHostCount=${approvedHosts.size})"
+}
+
+internal fun remoteConnectionStatus(service: ServiceState): String = when {
+    service.sessionActive && service.activeHost != null -> "Connected to ${service.activeHost}."
+    service.remoteEnabled -> "Remote control is on. Waiting for an authenticated host."
+    else -> "Remote control is off."
+}
 
 /**
  * Home-screen coordinator. It owns no Android node handles and only observes the
@@ -142,7 +168,7 @@ class HomeViewModel(
         statusOverride.value = when {
             changed && enabled -> "Remote control enabled. No authenticated host is connected yet."
             changed -> "Remote control stopped. No host is connected."
-            enabled -> "Enable the accessibility service first; remote control stays off."
+            enabled -> "Remote control could not start. Check the accessibility binding, notification visibility, and listener availability."
             else -> "Remote control is already off."
         }
     }
@@ -150,6 +176,47 @@ class HomeViewModel(
     fun disconnect() {
         UseService.requestDisconnect(appContext)
         statusOverride.value = "Remote control stopped and session metadata cleared."
+    }
+
+    fun setWifiEnabled(enabled: Boolean) {
+        val changed = UseService.setWifiEnabled(appContext, enabled)
+        statusOverride.value = if (changed) {
+            if (enabled) "Wi-Fi listener enabled on the current local IPv4 address." else "Wi-Fi listener disabled; loopback listener remains active."
+        } else if (enabled) {
+            "Wi-Fi listener could not start. Confirm remote control is on and Wi-Fi is connected."
+        } else {
+            "Could not restore the loopback listener. Stop and re-enable remote control."
+        }
+    }
+
+    fun beginPairing() {
+        val challenge = UseService.beginPairing(appContext)
+        statusOverride.value = if (challenge != null) {
+            "Pairing code created. It expires in five minutes; approve the host here."
+        } else {
+            "Turn on remote control before creating a pairing code."
+        }
+        if (challenge != null) {
+            scope.launch {
+                delay((challenge.expiresAtMillis - System.currentTimeMillis()).coerceAtLeast(0L))
+                UseService.refreshState(appContext)
+            }
+        }
+    }
+
+    fun approveHost(hostId: String) {
+        UseService.approveHost(hostId)
+        statusOverride.value = "Host approval recorded on this phone."
+    }
+
+    fun rejectHost(hostId: String) {
+        UseService.rejectHost(hostId)
+        statusOverride.value = "Pending host rejected on this phone."
+    }
+
+    fun revokeHost(hostId: String) {
+        UseService.revokeHost(hostId)
+        statusOverride.value = "Host authorization revoked."
     }
 
     override fun close() {
@@ -168,9 +235,7 @@ class HomeViewModel(
                 "Accessibility is off. Enable AndroidUse in Android accessibility settings."
             !service.connected ->
                 "Accessibility is enabled, but the service is not connected yet."
-            service.remoteEnabled ->
-                "Remote control is on. Waiting for an authenticated host."
-            else -> "Accessibility is ready. Remote control is off."
+            else -> "Accessibility is ready. ${remoteConnectionStatus(service)}"
         }
 
         return HomeUiState(
@@ -187,6 +252,17 @@ class HomeViewModel(
             notificationPermissionMissing =
                 SessionNotification.requiresPermission() && !SessionNotification.canPost(appContext),
             statusMessage = status,
+            endpointAddress = service.endpoint?.address?.hostAddress,
+            endpointPort = service.endpoint?.port,
+            deviceFingerprintSha256 = service.deviceFingerprintSha256,
+            deviceCertificatePem = service.deviceCertificatePem,
+            pairingCode = service.pairingCode,
+            pairingExpiresAtMillis = service.pairingExpiresAtMillis,
+            pendingHostId = service.pendingHostId,
+            pendingHostName = service.pendingHostName,
+            pendingHostFingerprintSha256 = service.pendingHostFingerprintSha256,
+            approvedHosts = service.approvedHosts,
+            transportError = service.lastError,
         )
     }
 }

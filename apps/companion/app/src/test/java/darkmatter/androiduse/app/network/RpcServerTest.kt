@@ -4,6 +4,7 @@ import darkmatter.androiduse.app.pairing.HostRecord
 import darkmatter.androiduse.app.actions.ActionCancellation
 import darkmatter.androiduse.app.pairing.PairingManager
 import darkmatter.androiduse.app.pairing.PairingStore
+import darkmatter.androiduse.app.pairing.PairingStatus
 import java.net.InetAddress
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
@@ -14,6 +15,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -37,6 +39,17 @@ class RpcServerTest {
         assertIllegalArgument { RpcServerLimits(writeTimeoutMillis = 0) }
         assertIllegalArgument { RpcServerLimits(idleTimeoutMillis = 0) }
         assertIllegalArgument { RpcServerLimits(maxInflightPerConnection = 0) }
+    }
+
+    @Test
+    fun closedConnectionGateRejectsPreviouslyQueuedBusinessWork() {
+        val gate = ConnectionDispatchGate()
+        val dispatched = AtomicInteger()
+
+        assertTrue(gate.begin { dispatched.incrementAndGet() })
+        gate.close()
+        assertEquals(false, gate.begin { dispatched.incrementAndGet() })
+        assertEquals(1, dispatched.get())
     }
 
     @Test
@@ -91,9 +104,11 @@ class RpcServerTest {
         val pairing = newPairingManager()
         val certificate = hostCertificate()
         val challenge = pairing.begin()
+        var pairingChanges = 0
         val handler = CompanionRpcHandler(
             pairing,
             businessDispatcher = { request, _ -> RpcResponse(PROTOCOL_VERSION, request.requestId) },
+            pairingChanged = { pairingChanges++ },
         )
         val params = buildJsonObject {
             put("code", challenge.code)
@@ -105,6 +120,8 @@ class RpcServerTest {
 
         assertEquals("WAITING", (response.result as JsonObject)["status"]?.let { (it as JsonPrimitive).content })
         assertEquals(false, pairing.isApproved(SessionIdentity(certificate).fingerprintSha256))
+        assertEquals(1, pairingChanges)
+        assertEquals("Test Host", pairing.pendingHostInfo()?.hostName)
     }
 
     @Test
@@ -136,6 +153,14 @@ class RpcServerTest {
         val certificate = hostCertificate()
         val challenge = pairing.begin()
         pairing.submit(challenge.code, HOST_ID, "Test Host", certificate)
+        val preApprovalHandler = CompanionRpcHandler(
+            pairing,
+            businessDispatcher = { request, _ -> RpcResponse(PROTOCOL_VERSION, request.requestId, result = JsonPrimitive(true)) },
+        )
+        val remoteApproval = preApprovalHandler.handle(request("pairing.approve"), SessionIdentity(certificate))
+        assertEquals(RpcErrorCode.UNAUTHORIZED, remoteApproval.error?.code)
+        assertFalse(pairing.isApproved(SessionIdentity(certificate).fingerprintSha256))
+        assertEquals(PairingStatus.WAITING, pairing.approvalStatus(challenge.challengeId))
         pairing.approve(HOST_ID)
         val dispatched = AtomicInteger()
         val cancelled = AtomicInteger()
