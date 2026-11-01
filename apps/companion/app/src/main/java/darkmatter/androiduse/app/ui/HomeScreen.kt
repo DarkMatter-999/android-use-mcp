@@ -134,9 +134,9 @@ fun HomeContent(
             RecentActionsCard(state.recentActions)
             StopControl(state, onDisconnect)
             Text(
-                text = "This build does not implement screenshots or gesture injection. " +
-                    "It exposes bounded accessibility snapshots and the control lifecycle only; " +
-                    "click, fill, and scroll actions arrive in the next task.",
+                text = "This build has a local accessibility action engine for clicks, text entry, " +
+                    "scrolling, bounded gestures, and supported system actions. Authenticated " +
+                    "host transport is not implemented yet, and screenshots are unavailable.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -199,9 +199,9 @@ private fun FirstRunExplanation(onAcknowledgeExplanation: () -> Unit) {
         containerColor = MaterialTheme.colorScheme.secondaryContainer,
     ) {
         Text(
-            "Enabling remote control lets an approved computer host inspect the current " +
-                "screen's accessibility tree and, once the action engine is available, " +
-                "perform clicks, scrolling, and text entry while this service is on.",
+            "The local action engine can inspect the current screen's accessibility tree and " +
+                "perform supported actions while this service is on. An approved computer host " +
+                "cannot connect until authenticated transport is implemented.",
             style = MaterialTheme.typography.bodyMedium,
         )
         Text(

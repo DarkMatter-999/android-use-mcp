@@ -2,14 +2,20 @@ package darkmatter.androiduse.app.accessibility
 
 import android.Manifest
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.accessibilityservice.GestureDescription
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Path
 import android.graphics.Rect
 import android.os.Build
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.core.app.NotificationCompat
@@ -25,11 +31,26 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import darkmatter.androiduse.app.actions.ActionBackend
+import darkmatter.androiduse.app.actions.ActionExecutor
+import darkmatter.androiduse.app.actions.ActionLogStore
+import darkmatter.androiduse.app.actions.ActionNode
+import darkmatter.androiduse.app.actions.GestureKind
+import darkmatter.androiduse.app.actions.GestureResult
+import darkmatter.androiduse.app.actions.GestureSpec
+import darkmatter.androiduse.app.actions.GlobalAction
+import darkmatter.androiduse.app.actions.ScrollDirection
 import darkmatter.androiduse.app.MainActivity
 import darkmatter.androiduse.app.R
 import darkmatter.androiduse.app.network.UiBounds
 import darkmatter.androiduse.app.network.UiSnapshot
+import darkmatter.androiduse.app.selectors.CurrentTree
+import darkmatter.androiduse.app.selectors.NodePath
+import darkmatter.androiduse.app.selectors.NodePathMissingException
+import darkmatter.androiduse.app.selectors.NodePathStaleException
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * Accessibility service that exposes bounded, on-demand snapshots.
@@ -156,6 +177,16 @@ class UseService : AccessibilityService() {
         publishState()
     }
 
+    /** Current event-driven revision, readable without acquiring a node. */
+    fun currentRevision(): Int = revision.get()
+
+    /** Platform backend for the local native action engine. */
+    fun actionBackend(): ActionBackend = AndroidActionBackend()
+
+    fun actionExecutor(logStore: ActionLogStore = ActionLogStore.shared): ActionExecutor =
+        ActionExecutor(backend = actionBackend(), logStore = logStore)
+
+    @Synchronized
     private fun invalidateTree() {
         // Revision changes immediately so refs become stale as soon as the user
         // interface changes; only state publication is debounced.
@@ -187,6 +218,124 @@ class UseService : AccessibilityService() {
     }
 
     private fun deviceId(): String = ServicePreferences.deviceId(this)
+
+    /** Native actions always resolve a fresh tree and release every acquired node. */
+    private inner class AndroidActionBackend : ActionBackend {
+        override fun currentRevision(): Int = revision.get()
+
+        override fun currentTree(): CurrentTree = CurrentTree(snapshot(SnapshotMode.FULL))
+
+        @Synchronized
+        override fun <T> withNode(path: NodePath, block: (ActionNode) -> T): T {
+            if (path.revision != revision.get() || path.ref != TreeSnapshotter.refFor(path.revision, path.index)) {
+                throw NodePathStaleException()
+            }
+            val root = rootInActiveWindow ?: throw NodePathMissingException()
+            val resources = NodeResources()
+            try {
+                resources.track(root)
+                val node = locateNode(root, path.index, resources) ?: throw NodePathMissingException()
+                if (path.revision != revision.get()) throw NodePathStaleException()
+                return block(AndroidActionNode(node))
+            } finally {
+                resources.releaseAll()
+            }
+        }
+
+        override fun dispatchGesture(spec: GestureSpec): GestureResult {
+            if ((serviceInfo?.capabilities ?: 0) and AccessibilityServiceInfo.CAPABILITY_CAN_PERFORM_GESTURES == 0) {
+                return GestureResult(success = false, unsupported = true, message = "Gesture dispatch is not supported")
+            }
+            val path = Path().apply {
+                moveTo(spec.startX.toFloat(), spec.startY.toFloat())
+                if (spec.kind == GestureKind.SWIPE) {
+                    lineTo(requireNotNull(spec.endX).toFloat(), requireNotNull(spec.endY).toFloat())
+                }
+            }
+            val gesture = GestureDescription.Builder()
+                .addStroke(GestureDescription.StrokeDescription(path, 0L, spec.durationMillis))
+                .build()
+            val latch = CountDownLatch(1)
+            var completed = false
+            var cancelled = false
+            val callback = object : GestureResultCallback() {
+                override fun onCompleted(gestureDescription: GestureDescription?) { completed = true; latch.countDown() }
+                override fun onCancelled(gestureDescription: GestureDescription?) { cancelled = true; latch.countDown() }
+            }
+            val dispatched = try {
+                dispatchGesture(gesture, callback, Handler(Looper.getMainLooper()))
+            } catch (_: RuntimeException) {
+                false
+            }
+            if (!dispatched) return GestureResult(success = false, message = "Gesture dispatch was rejected")
+            val finished = try {
+                latch.await(spec.timeoutMillis, TimeUnit.MILLISECONDS)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                false
+            }
+            return when {
+                !finished -> GestureResult(success = false, timedOut = true, message = "Gesture did not complete before timeout")
+                cancelled -> GestureResult(success = false, message = "Gesture was cancelled by the system")
+                completed -> GestureResult(success = true)
+                else -> GestureResult(success = false, message = "Gesture outcome is unknown")
+            }
+        }
+
+        override fun performGlobalAction(action: GlobalAction): Boolean = when (action) {
+            GlobalAction.BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
+            GlobalAction.HOME -> performGlobalAction(GLOBAL_ACTION_HOME)
+            GlobalAction.RECENTS -> performGlobalAction(GLOBAL_ACTION_RECENTS)
+            GlobalAction.NOTIFICATIONS -> performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS)
+        }
+
+        private fun locateNode(
+            root: AccessibilityNodeInfo,
+            targetIndex: Int,
+            resources: NodeResources,
+        ): AccessibilityNodeInfo? {
+            var visited = -1
+            fun visit(node: AccessibilityNodeInfo, depth: Int): AccessibilityNodeInfo? {
+                visited++
+                if (visited == targetIndex) return node
+                if (visited > targetIndex || depth > SnapshotLimits.DEFAULT_MAX_DEPTH) return null
+                for (index in 0 until node.childCount) {
+                    if (visited >= targetIndex) return null
+                    val child = try { node.getChild(index) } catch (_: RuntimeException) { null } ?: continue
+                    resources.track(child)
+                    visit(child, depth + 1)?.let { return it }
+                }
+                return null
+            }
+            return visit(root, 0)
+        }
+
+        private inner class AndroidActionNode(private val node: AccessibilityNodeInfo) : ActionNode {
+            override val clickable get() = node.isClickable
+            override val editable get() = node.isEditable
+            override val enabled get() = node.isEnabled
+            override val visible get() = node.isVisibleToUser
+            override val scrollable get() = node.isScrollable
+            override val bounds: UiBounds
+                get() = Rect().let { rect ->
+                    node.getBoundsInScreen(rect)
+                    UiBounds(rect.left, rect.top, rect.right, rect.bottom)
+                }
+            override val resourceId: String? get() = node.viewIdResourceName
+            override fun click() = node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            override fun longClick() = node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
+            override fun setText(value: String): Boolean = node.performAction(
+                AccessibilityNodeInfo.ACTION_SET_TEXT,
+                Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value) },
+            )
+            override fun scroll(direction: ScrollDirection): Boolean = when (direction) {
+                ScrollDirection.UP, ScrollDirection.BACKWARD -> node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
+                ScrollDirection.DOWN, ScrollDirection.FORWARD -> node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+                ScrollDirection.LEFT -> node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_LEFT.id)
+                ScrollDirection.RIGHT -> node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_RIGHT.id)
+            }
+        }
+    }
 
     // ----------------------------------------------------------- node adapter
 
