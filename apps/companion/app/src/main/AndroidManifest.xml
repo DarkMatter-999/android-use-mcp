@@ -4,6 +4,8 @@
 
     <!-- Required on Android 13+ for the persistent active-session notification. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Required for the explicitly authorized loopback TLS instrumentation probe. -->
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <application
         android:allowBackup="true"
