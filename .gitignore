@@ -1,0 +1,21 @@
+# Intentionally ignored: private plan/spec workspace and SDD run artifacts.
+/docs/superpowers/
+/.superpowers/
+
+# Node/TypeScript generated outputs and local state.
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.pnpm-store/
+npm-debug.log*
+pnpm-debug.log*
+
+# Android/Gradle generated outputs and machine-local configuration.
+apps/companion/.gradle/
+apps/companion/.kotlin/
+apps/companion/build/
+apps/companion/app/build/
+apps/companion/local.properties
+apps/companion/.idea/
+*.iml

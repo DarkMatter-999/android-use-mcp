@@ -1,0 +1,22 @@
+{
+  "name": "android-use-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.15.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "pnpm -r --if-present run test",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "check": "pnpm run typecheck && pnpm run test",
+    "android:build": "cd apps/companion && JAVA_HOME=/usr/lib/jvm/java-17-openjdk ./gradlew :app:assembleDebug",
+    "android:test": "cd apps/companion && JAVA_HOME=/usr/lib/jvm/java-17-openjdk ./gradlew :app:testDebugUnitTest"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

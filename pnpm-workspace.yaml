@@ -1,0 +1,12 @@
+packages:
+  - packages/*
+
+catalog:
+  '@types/node': 24.19.2
+  typescript: 5.9.3
+  vitest: 5.0.5
+
+# Install-time build scripts that are explicitly trusted (pnpm 12 `allowBuilds`).
+allowBuilds:
+  esbuild: true
+  isolated-vm: true
