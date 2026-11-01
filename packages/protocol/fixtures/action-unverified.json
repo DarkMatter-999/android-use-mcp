@@ -1,0 +1,22 @@
+{
+  "protocolVersion": 1,
+  "requestId": "5ad5f4f0-8b60-4c6e-9d42-4f6c1a7e2b30",
+  "result": {
+    "actionId": "act-20261028-0001",
+    "action": "click",
+    "accepted": true,
+    "verified": null,
+    "target": {
+      "ref": "w42r7n0",
+      "text": "Network & internet",
+      "bounds": [
+        0,
+        220,
+        1080,
+        340
+      ]
+    },
+    "revisionBefore": 7,
+    "revisionAfter": 8
+  }
+}

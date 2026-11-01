@@ -1,0 +1,40 @@
+{
+  "protocolVersion": 1,
+  "requestId": "c2f0a7d4-6b1e-4a83-9f52-7d8e1c0b3a69",
+  "result": {
+    "deviceId": "emulator-5554",
+    "windowId": "window-42",
+    "revision": 7,
+    "packageName": "com.android.settings",
+    "windowTitle": "Settings",
+    "width": 1080,
+    "height": 2400,
+    "elements": [
+      {
+        "ref": "w42r7n0",
+        "className": "android.widget.TextView",
+        "role": "text",
+        "text": "Network & internet",
+        "resourceId": "com.android.settings:id/network_dashboard",
+        "bounds": {
+          "left": 0,
+          "top": 220,
+          "right": 1080,
+          "bottom": 340
+        },
+        "clickable": true,
+        "scrollable": false,
+        "editable": false,
+        "enabled": true,
+        "focused": false,
+        "visible": true,
+        "supportedActions": [
+          "click"
+        ],
+        "children": []
+      }
+    ],
+    "compactText": "[w42r7n0] text \"Network & internet\"",
+    "truncated": false
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "protocolVersion": 1,
+  "requestId": "8e7d6c5b-4a39-4281-9e0f-1a2b3c4d5e6f",
+  "error": {
+    "code": "STALE_REF",
+    "message": "Snapshot revision 7 is no longer current",
+    "details": {
+      "ref": "w42r7n0",
+      "revision": 7,
+      "currentRevision": 9
+    }
+  }
+}

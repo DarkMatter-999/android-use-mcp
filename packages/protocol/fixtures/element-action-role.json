@@ -1,0 +1,13 @@
+{
+  "protocolVersion": 1,
+  "requestId": "d4a1c9e2-3f5b-4a67-8c90-1e2d3f4a5b6c",
+  "method": "element.action",
+  "params": {
+    "selector": {
+      "type": "role",
+      "value": "button",
+      "name": "Save"
+    },
+    "action": "click"
+  }
+}
