@@ -151,6 +151,7 @@ class UseService : AccessibilityService() {
             ServicePreferences.setRemoteEnabled(this, false)
             SessionNotification.cancel(this)
         }
+        updateKeepScreenOn()
         publishState()
     }
 
@@ -318,6 +319,15 @@ class UseService : AccessibilityService() {
     private fun configureOverlay(options: OverlayOptions = ServicePreferences.overlayOptions(this)) {
         inspectorOverlay?.setOptions(options)
         if (options.inspector && connected) refreshOverlay()
+    }
+
+    private fun updateKeepScreenOn() {
+        val keepScreenOn = RemoteOverlayPolicy.shouldKeepScreenOn(
+            preferenceEnabled = ServicePreferences.isKeepScreenOnEnabled(this),
+            remoteEnabled = ServicePreferences.isRemoteEnabled(this),
+            serviceConnected = connected,
+        )
+        inspectorOverlay?.setKeepScreenOn(keepScreenOn)
     }
 
     private fun refreshOverlay() {
@@ -596,6 +606,7 @@ class UseService : AccessibilityService() {
             } else if (enabled) {
                 current?.setTransportError("Remote listener failed to start; remote control remains off")
             }
+            current?.updateKeepScreenOn()
             current?.publishState() ?: publishCompanionState(appContext)
             return accepted
         }
@@ -608,6 +619,7 @@ class UseService : AccessibilityService() {
             instance?.let { service ->
                 service.transportLifecycleDisable()
                 service.clearSession()
+                service.updateKeepScreenOn()
                 service.publishState()
             } ?: publishCompanionState(appContext)
         }
@@ -616,6 +628,15 @@ class UseService : AccessibilityService() {
             ServicePreferences.setOverlayOptions(context.applicationContext, options)
             instance?.configureOverlay(options)
             instance?.publishState() ?: publishCompanionState(context.applicationContext)
+        }
+
+        fun setKeepScreenOnEnabled(context: Context, enabled: Boolean) {
+            val appContext = context.applicationContext
+            ServicePreferences.setKeepScreenOnEnabled(appContext, enabled)
+            instance?.let { service ->
+                service.updateKeepScreenOn()
+                service.publishState()
+            } ?: publishCompanionState(appContext)
         }
 
         private fun publishCompanionState(context: Context) {
@@ -653,6 +674,7 @@ class UseService : AccessibilityService() {
                 service.clearSession()
                 service.setTransportError("Listener could not be restarted; remote control was stopped")
             }
+            service.updateKeepScreenOn()
             service.publishState()
             return accepted
         }
@@ -775,6 +797,7 @@ class UseService : AccessibilityService() {
         SessionNotification.cancel(this)
         transportLifecycleDisable()
         clearSession()
+        updateKeepScreenOn()
         publishState()
     }
 

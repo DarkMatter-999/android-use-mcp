@@ -194,6 +194,7 @@ object ServicePreferences {
     private const val KEY_OVERLAY_ACTION_TRACE = "overlay_action_trace"
     private const val KEY_OVERLAY_CURSOR = "overlay_cursor"
     private const val KEY_ALLOWED_LAUNCH_PACKAGES = "allowed_launch_packages"
+    private const val KEY_KEEP_SCREEN_ON = "keep_screen_on_during_remote_control"
 
     fun allowedLaunchPackages(context: Context): Set<String> =
         prefs(context).getStringSet(KEY_ALLOWED_LAUNCH_PACKAGES, emptySet()).orEmpty().toSet()
@@ -202,6 +203,13 @@ object ServicePreferences {
         prefs(context).edit {
             putStringSet(KEY_ALLOWED_LAUNCH_PACKAGES, packages.filter(String::isNotBlank).toSet())
         }
+    }
+
+    fun isKeepScreenOnEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_KEEP_SCREEN_ON, false)
+
+    fun setKeepScreenOnEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit { putBoolean(KEY_KEEP_SCREEN_ON, enabled) }
     }
 
     fun overlayOptions(context: Context): darkmatter.androiduse.app.overlay.OverlayOptions {
@@ -255,6 +263,21 @@ object ServicePreferences {
 
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+}
+
+/** Policy for keeping the display awake without affecting remote-control consent. */
+internal object RemoteOverlayPolicy {
+    fun shouldKeepScreenOn(
+        preferenceEnabled: Boolean,
+        remoteEnabled: Boolean,
+        serviceConnected: Boolean,
+    ): Boolean = preferenceEnabled && remoteEnabled && serviceConnected
+
+    fun shouldAttach(
+        inspectorEnabled: Boolean,
+        traceEnabled: Boolean,
+        keepScreenOn: Boolean,
+    ): Boolean = inspectorEnabled || traceEnabled || keepScreenOn
 }
 
 /**

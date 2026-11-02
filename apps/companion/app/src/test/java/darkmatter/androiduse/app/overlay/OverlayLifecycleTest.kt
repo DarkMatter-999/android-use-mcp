@@ -32,6 +32,25 @@ class OverlayLifecycleTest {
     }
 
     @Test
+    fun keepScreenOnAttachesAnInvisibleOverlayWithoutInspectorAndDetachesWhenDisabled() {
+        val surface = RecordingSurface()
+        val lifecycle = OverlayLifecycle(surface)
+
+        lifecycle.setKeepScreenOn(true)
+
+        assertTrue(lifecycle.isVisible)
+        assertEquals(1, surface.attachCount)
+        assertTrue(surface.keepScreenOnEnabled)
+
+        lifecycle.setKeepScreenOn(false)
+
+        assertFalse(lifecycle.isVisible)
+        assertEquals(1, surface.detachCount)
+        assertFalse(surface.keepScreenOnEnabled)
+        lifecycle.close()
+    }
+
+    @Test
     fun accessibilityOverlayIsNonTouchableAndNonFocusable() {
         val flags: Int = InspectorOverlay.windowFlags
 
@@ -148,6 +167,11 @@ class OverlayLifecycleTest {
         var options: OverlayOptions? = null
         var attachCount = 0
         var detachCount = 0
+        var keepScreenOnEnabled = false
+
+        override fun setKeepScreenOn(enabled: Boolean) {
+            keepScreenOnEnabled = enabled
+        }
 
         override fun attach(frame: OverlayFrame, options: OverlayOptions) {
             this.options = options

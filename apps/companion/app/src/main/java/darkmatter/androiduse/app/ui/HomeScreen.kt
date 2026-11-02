@@ -4,6 +4,7 @@ import android.content.Intent
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -39,7 +40,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -72,6 +76,7 @@ private const val POST_NOTIFICATIONS_PERMISSION = "android.permission.POST_NOTIF
 @Composable
 fun HomeScreen(viewModel: HomeViewModel) {
     val state by viewModel.state.collectAsState()
+    var destination by rememberSaveable { mutableStateOf(HomeDestination.HOME) }
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -88,33 +93,70 @@ fun HomeScreen(viewModel: HomeViewModel) {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    HomeContent(
-        state = state,
-        onOpenAccessibilitySettings = {
-            context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-        },
-        onRemoteControlChange = { enabled ->
-            if (viewModel.beginRemoteToggle(enabled)) {
+    BackHandler(enabled = destination != HomeDestination.HOME) {
+        destination = destination.back()
+    }
+
+    if (destination == HomeDestination.ALLOWED_APPS) {
+        AllowedAppsScreen(
+            apps = state.launchableApps,
+            allowedPackages = state.allowedLaunchPackages,
+            onSetAppAllowed = viewModel::setAppAllowed,
+            onBack = { destination = destination.back() },
+        )
+    } else {
+        HomeContent(
+            state = state,
+            onOpenAccessibilitySettings = {
+                context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            },
+            onRemoteControlChange = { enabled ->
+                if (viewModel.beginRemoteToggle(enabled)) {
+                    notificationPermissionLauncher.launch(POST_NOTIFICATIONS_PERMISSION)
+                }
+            },
+            onRequestNotificationPermission = {
                 notificationPermissionLauncher.launch(POST_NOTIFICATIONS_PERMISSION)
-            }
-        },
-        onRequestNotificationPermission = {
-            notificationPermissionLauncher.launch(POST_NOTIFICATIONS_PERMISSION)
-        },
-        onAcknowledgeExplanation = viewModel::acknowledgeExplanation,
-        onDisconnect = viewModel::disconnect,
-        onWifiChange = viewModel::setWifiEnabled,
-        onOverlayOptionsChange = viewModel::setOverlayOptions,
-        onSetAppAllowed = viewModel::setAppAllowed,
-        onBeginPairing = viewModel::beginPairing,
-        onApproveHost = viewModel::approveHost,
-        onRejectHost = viewModel::rejectHost,
-        onRevokeHost = viewModel::revokeHost,
-        onCopyPublicValue = { label, value ->
-            context.getSystemService(ClipboardManager::class.java)
-                ?.setPrimaryClip(ClipData.newPlainText(label, value))
-        },
-    )
+            },
+            onAcknowledgeExplanation = viewModel::acknowledgeExplanation,
+            onDisconnect = viewModel::disconnect,
+            onWifiChange = viewModel::setWifiEnabled,
+            onOverlayOptionsChange = viewModel::setOverlayOptions,
+            onOpenAllowedApps = { destination = destination.openAllowedApps() },
+            onKeepScreenOnChange = viewModel::setKeepScreenOnEnabled,
+            onBeginPairing = viewModel::beginPairing,
+            onApproveHost = viewModel::approveHost,
+            onRejectHost = viewModel::rejectHost,
+            onRevokeHost = viewModel::revokeHost,
+            onCopyPublicValue = { label, value ->
+                context.getSystemService(ClipboardManager::class.java)
+                    ?.setPrimaryClip(ClipData.newPlainText(label, value))
+            },
+        )
+    }
+}
+
+@Composable
+private fun AllowedAppsScreen(
+    apps: List<LaunchableApp>,
+    allowedPackages: Set<String>,
+    onSetAppAllowed: (String, Boolean) -> Unit,
+    onBack: () -> Unit,
+) {
+    Surface(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.safeDrawing)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            OutlinedButton(onClick = onBack) { Text("Back") }
+            Text("App selector", style = MaterialTheme.typography.headlineMedium)
+            AllowedAppsCard(apps, allowedPackages, onSetAppAllowed)
+        }
+    }
 }
 
 @Composable
@@ -127,7 +169,8 @@ fun HomeContent(
     onDisconnect: () -> Unit,
     onWifiChange: (Boolean) -> Unit = {},
     onOverlayOptionsChange: (OverlayOptions) -> Unit = {},
-    onSetAppAllowed: (String, Boolean) -> Unit = { _, _ -> },
+    onOpenAllowedApps: () -> Unit = {},
+    onKeepScreenOnChange: (Boolean) -> Unit = {},
     onBeginPairing: () -> Unit = {},
     onApproveHost: (String) -> Unit = {},
     onRejectHost: (String) -> Unit = {},
@@ -153,6 +196,7 @@ fun HomeContent(
                 state = state,
                 onRemoteControlChange = onRemoteControlChange,
                 onRequestNotificationPermission = onRequestNotificationPermission,
+                onKeepScreenOnChange = onKeepScreenOnChange,
             )
             ConnectionCard(
                 state = state,
@@ -164,7 +208,16 @@ fun HomeContent(
                 onCopyPublicValue = onCopyPublicValue,
             )
             OverlaySettingsCard(state.overlayOptions, onOverlayOptionsChange, state.accessibilityConnected)
-            AllowedAppsCard(state.launchableApps, state.allowedLaunchPackages, onSetAppAllowed)
+            SectionCard(title = "App access") {
+                Text(
+                    "Choose which apps an approved remote host may open.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedButton(onClick = onOpenAllowedApps, modifier = Modifier.fillMaxWidth()) {
+                    Text("Allowed apps (${state.allowedLaunchPackages.size} selected)")
+                }
+            }
             RecentActionsCard(state.recentActions)
             StopControl(state, onDisconnect)
             Text(
@@ -329,6 +382,7 @@ private fun RemoteControlCard(
     state: HomeUiState,
     onRemoteControlChange: (Boolean) -> Unit,
     onRequestNotificationPermission: () -> Unit,
+    onKeepScreenOnChange: (Boolean) -> Unit,
 ) {
     SectionCard(title = "Remote control") {
         Row(
@@ -367,6 +421,25 @@ private fun RemoteControlCard(
             OutlinedButton(onClick = onRequestNotificationPermission) {
                 Text("Grant notification permission")
             }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Keep screen on during remote control", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "Prevents screen timeout while remote control is active. Uses more battery; it does not wake or unlock the phone.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = state.keepScreenOnEnabled,
+                onCheckedChange = onKeepScreenOnChange,
+            )
         }
     }
 }

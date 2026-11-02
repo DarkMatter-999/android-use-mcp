@@ -55,6 +55,7 @@ data class HomeUiState(
     val overlayOptions: OverlayOptions = OverlayOptions(false, true, true, true, true),
     val launchableApps: List<LaunchableApp> = emptyList(),
     val allowedLaunchPackages: Set<String> = emptySet(),
+    val keepScreenOnEnabled: Boolean = false,
 ) {
     override fun toString(): String = "HomeUiState(deviceModel=$deviceModel, apiLevel=$apiLevel, " +
         "accessibilityEnabled=$accessibilityEnabled, accessibilityConnected=$accessibilityConnected, " +
@@ -230,6 +231,11 @@ class HomeViewModel(
         }
     }
 
+    fun setKeepScreenOnEnabled(enabled: Boolean) {
+        UseService.setKeepScreenOnEnabled(appContext, enabled)
+        mutableState.value = mutableState.value.copy(keepScreenOnEnabled = enabled)
+    }
+
     fun beginPairing() {
         val challenge = UseService.beginPairing(appContext)
         statusOverride.value = if (challenge != null) {
@@ -309,6 +315,7 @@ class HomeViewModel(
             overlayOptions = service.overlayOptions,
             launchableApps = launchableApps,
             allowedLaunchPackages = allowedLaunchPackages,
+            keepScreenOnEnabled = ServicePreferences.isKeepScreenOnEnabled(appContext),
         )
     }
 }

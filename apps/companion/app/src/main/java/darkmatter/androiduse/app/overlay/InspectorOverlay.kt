@@ -8,12 +8,14 @@ import android.graphics.RectF
 import android.view.View
 import android.view.WindowManager
 import java.util.concurrent.atomic.AtomicBoolean
+import darkmatter.androiduse.app.accessibility.RemoteOverlayPolicy
 import darkmatter.androiduse.app.network.UiBounds
 
 interface OverlaySurface {
     fun attach(frame: OverlayFrame, options: OverlayOptions)
     fun update(frame: OverlayFrame, options: OverlayOptions)
     fun detach()
+    fun setKeepScreenOn(enabled: Boolean) = Unit
 }
 
 /** Owns visibility, suppression nesting, and failure isolation for an overlay surface. */
@@ -23,6 +25,7 @@ class OverlayLifecycle(
 ) : AutoCloseable {
     private var options: OverlayOptions = OverlayOptions(false, false, false, false, false)
     private var frame: OverlayFrame? = null
+    private var keepScreenOn = false
     private var suppressionDepth = 0
     private var restoreAfterSuppression = false
     private var closed = false
@@ -45,6 +48,18 @@ class OverlayLifecycle(
     }
 
     @Synchronized
+    fun setKeepScreenOn(enabled: Boolean) {
+        if (closed || keepScreenOn == enabled) return
+        keepScreenOn = enabled
+        try {
+            surface.setKeepScreenOn(enabled)
+        } catch (error: Exception) {
+            onError(error)
+        }
+        synchronizeSurface()
+    }
+
+    @Synchronized
     fun hideForCapture(): AutoCloseable {
         if (closed) return AutoCloseable { }
         if (suppressionDepth == 0) {
@@ -61,7 +76,7 @@ class OverlayLifecycle(
                 if (suppressionDepth == 0) {
                     val shouldRestore = restoreAfterSuppression
                     restoreAfterSuppression = false
-                    if (shouldRestore && options.inspector && frame != null && !closed) attachSurface()
+                    if (shouldRestore && shouldAttachSurface() && !closed) attachSurface()
                 }
             }
         }
@@ -82,16 +97,18 @@ class OverlayLifecycle(
         closed = true
         suppressionDepth = 0
         restoreAfterSuppression = false
+        keepScreenOn = false
+        runCatching { surface.setKeepScreenOn(false) }
         detachSurface()
     }
 
     @Synchronized
     private fun synchronizeSurface() {
-        if (closed || suppressionDepth > 0 || !options.inspector || frame == null) {
+        if (closed || suppressionDepth > 0 || !shouldAttachSurface()) {
             if (isVisible) detachSurface()
             return
         }
-        val current = frame ?: return
+        val current = frame ?: EMPTY_OVERLAY_FRAME
         try {
             if (isVisible) surface.update(current, options) else surface.attach(current, options)
             isVisible = true
@@ -102,7 +119,8 @@ class OverlayLifecycle(
     }
 
     private fun attachSurface() {
-        val current = frame ?: return
+        if (!shouldAttachSurface()) return
+        val current = frame ?: EMPTY_OVERLAY_FRAME
         try {
             surface.attach(current, options)
             isVisible = true
@@ -121,6 +139,26 @@ class OverlayLifecycle(
             onError(error)
         }
     }
+
+    private fun shouldAttachSurface(): Boolean {
+        val hasRenderableFrame = frame != null
+        return RemoteOverlayPolicy.shouldAttach(
+            inspectorEnabled = options.inspector && hasRenderableFrame,
+            traceEnabled = options.inspector && options.actionTrace && hasRenderableFrame,
+            keepScreenOn = keepScreenOn,
+        )
+    }
+
+    private companion object {
+        val EMPTY_OVERLAY_FRAME = OverlayFrame(
+            widthPx = 0,
+            heightPx = 0,
+            elements = emptyList(),
+            actionTrace = emptyList(),
+            cursor = null,
+            labelTextSizePx = 0f,
+        )
+    }
 }
 
 /** Non-interactive accessibility overlay window; no overlay permission is requested. */
@@ -134,6 +172,7 @@ class InspectorOverlay(
 
     fun setOptions(options: OverlayOptions) = lifecycle.setOptions(options)
     fun update(frame: OverlayFrame) = lifecycle.update(frame)
+    fun setKeepScreenOn(enabled: Boolean) = lifecycle.setKeepScreenOn(enabled)
     fun hideForCapture(): AutoCloseable = lifecycle.hideForCapture()
     fun <T> withDecorationsHidden(block: () -> T): T = lifecycle.withDecorationsHidden(block)
 
@@ -146,13 +185,17 @@ class InspectorOverlay(
         private val windowManager: WindowManager,
     ) : OverlaySurface {
         private var view: OverlayView? = null
+        private var keepScreenOn = false
 
         override fun attach(frame: OverlayFrame, options: OverlayOptions) {
             if (view != null) {
                 update(frame, options)
                 return
             }
-            val overlayView = OverlayView(context).apply { render(frame, options) }
+            val overlayView = OverlayView(context).apply {
+                this.keepScreenOn = this@WindowSurface.keepScreenOn
+                render(frame, options)
+            }
             windowManager.addView(overlayView, layoutParams())
             view = overlayView
         }
@@ -166,6 +209,11 @@ class InspectorOverlay(
             view = null
             current.cancelCursorAnimation()
             windowManager.removeView(current)
+        }
+
+        override fun setKeepScreenOn(enabled: Boolean) {
+            keepScreenOn = enabled
+            view?.keepScreenOn = enabled
         }
 
         fun animateCursor(point: OverlayPoint) {
