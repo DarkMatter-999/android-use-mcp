@@ -27,7 +27,7 @@ The local MCP command is `packages/mcp/dist/src/cli.js`. Keep the build output i
 1. Open Android Use and enable its Accessibility service through Android Settings. This is a user-controlled Android setting; the app cannot enable it for you.
 2. Enable **Remote control** in the app. Keep the app's visible notification active.
 3. In **Connection and session**, copy the **Phone certificate fingerprint** and **Public certificate**. Save the PEM certificate to a persistent file on the computer, for example `~/.config/android-use/device-certificate.pem`. Do not use a temporary directory.
-4. Note the **Listener endpoint** shown in the app. For Wi-Fi, enable **Expose on current Wi-Fi** and use the phone's displayed IP address and port. The MCP URL is `wss://<phone-ip>:<port>/rpc`.
+4. Note the **Listener endpoint** shown in the app. The listener uses stable port `43419` by default; you can set a custom port in **Connection and session** while remote control is off. For Wi-Fi, enable **Expose on current Wi-Fi** and use the phone's displayed IP address and port. The MCP URL is `wss://<phone-ip>:<port>/rpc`. Reserve the phone's IP in your router if you also want the full URL to remain stable across Wi-Fi reconnects.
 
 The fingerprint is the SHA-256 pin for the phone certificate (64 hexadecimal characters). The PEM file and fingerprint must come from the same phone identity. The public phone certificate is not a private key, but avoid placing it in a temporary location that may disappear.
 
@@ -91,6 +91,10 @@ The MCP process starts locally. It connects to the phone lazily when a device to
 4. After approval, use `android_status` to confirm the authenticated connection.
 
 Pairing codes are short-lived. Host approval and revocation are phone-side actions; deleting the computer's identity files does **not** revoke an already approved host. Revoke it in the app.
+
+## Discover and launch allowed apps
+
+Use `android_list_apps` to see launcher-visible apps the phone owner has already selected for remote launch. Each entry includes its display name and package ID. `android_open_app` requests launch through the same phone-side selection; the host cannot modify that allowlist. The host MCP server and phone companion must both use protocol v2 builds.
 
 ## Troubleshooting
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { RemoteRpcError } from '@android-use/transport';
 import { AndroidDevice } from '../src/index.js';
 
 function createDevice(responses: unknown[] = []) {
@@ -23,18 +24,35 @@ describe('AndroidDevice bounded action helpers', () => {
     await expect(device.performGesture('swipe', { x: -1, y: 1, endX: 2, endY: 2 })).rejects.toThrow(/coordinate/i);
   });
 
-  it('validates global actions and rejects malformed or non-allowlisted app packages before RPC', async () => {
+  it('validates global actions and rejects malformed app packages before RPC', async () => {
     const { device, calls } = createDevice();
     await expect(device.performGlobalAction('back')).resolves.toMatchObject({ accepted: true });
     await expect(Promise.resolve().then(() => device.launchApp('not a package'))).rejects.toThrow(/package/i);
-    await expect(Promise.resolve().then(() => device.launchApp('com.example.unknown'))).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
     expect(calls.map((call) => call.method)).toEqual(['element.action']);
   });
 
-  it('launches only a phone-allowlisted package through the app.launch method', async () => {
+  it('forwards syntactically valid app packages to the phone allowlist policy', async () => {
     const { device, calls } = createDevice();
-    await device.launchApp('com.android.settings');
-    expect(calls[0]).toEqual({ method: 'app.launch', params: { packageName: 'com.android.settings' } });
+    await device.launchApp('com.example.calculator');
+    expect(calls[0]).toEqual({ method: 'app.launch', params: { packageName: 'com.example.calculator' } });
+  });
+
+  it('preserves a phone-side not-allowlisted rejection from app.launch', async () => {
+    const rejection = new RemoteRpcError('UNAUTHORIZED', 'not allowlisted', { reason: 'NOT_ALLOWLISTED' });
+    const { device, calls } = createDevice([rejection]);
+
+    await expect(device.launchApp('com.example.calculator')).rejects.toMatchObject({
+      code: 'UNAUTHORIZED',
+      details: { reason: 'NOT_ALLOWLISTED' },
+    });
+    expect(calls[0]).toEqual({ method: 'app.launch', params: { packageName: 'com.example.calculator' } });
+  });
+
+  it('lists phone-approved apps through app.list with empty params', async () => {
+    const apps = { apps: [{ name: 'Calculator', packageName: 'com.example.calculator' }] };
+    const { device, calls } = createDevice([apps]);
+    await expect(device.listApps()).resolves.toEqual(apps);
+    expect(calls[0]).toEqual({ method: 'app.list', params: {} });
   });
 
   it('re-resolves a selector between each bounded scroll and stops when visible', async () => {

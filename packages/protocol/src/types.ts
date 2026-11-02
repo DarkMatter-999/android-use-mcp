@@ -4,12 +4,12 @@ import type { RpcErrorCode } from './errors.js';
  * Wire protocol version shared by the Android companion and the TypeScript host.
  * Every RPC envelope carries this value; it is bumped only for breaking changes.
  */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 /** Method that cancels an in-flight operation; its params name the cancelled request. */
 export const RPC_CANCEL_METHOD = 'rpc.cancel';
 
-/** Method names frozen for protocol version 1. */
+/** Method names frozen for protocol version 2. */
 export const RPC_METHODS = [
   'device.status',
   'pairing.begin',
@@ -23,12 +23,22 @@ export const RPC_METHODS = [
   'gesture.perform',
   'screenshot.capture',
   'app.launch',
+  'app.list',
   RPC_CANCEL_METHOD,
 ] as const;
 
 export type RpcMethod = (typeof RPC_METHODS)[number];
 
-/** Selector variants frozen for protocol version 1. */
+export interface AndroidAppInfo {
+  name: string;
+  packageName: string;
+}
+
+export interface AndroidAppList {
+  apps: AndroidAppInfo[];
+}
+
+/** Selector variants frozen for protocol version 2. */
 export type SelectorType = 'text' | 'resourceId' | 'description' | 'role' | 'ref';
 
 export interface TextSelector {

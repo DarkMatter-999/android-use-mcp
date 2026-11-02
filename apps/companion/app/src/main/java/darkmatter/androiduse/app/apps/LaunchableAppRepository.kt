@@ -26,6 +26,9 @@ fun interface LauncherActivitySource {
 class LaunchableAppRepository(private val source: LauncherActivitySource) {
     constructor(queryActivities: () -> List<LauncherActivity>) : this(LauncherActivitySource(queryActivities))
 
+    fun listAllowedLaunchableApps(allowedPackages: Set<String>): List<LaunchableApp> =
+        listLaunchableApps().filter { it.packageName in allowedPackages }
+
     fun listLaunchableApps(): List<LaunchableApp> = source.queryActivities()
         .asSequence()
         .filter { it.packageName.isNotBlank() && it.action == LauncherActions.MAIN && LauncherActions.LAUNCHER in it.categories }

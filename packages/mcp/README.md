@@ -1,12 +1,13 @@
 # Android Use MCP
 
-Local stdio MCP server for the Android Use companion app. It adapts the authenticated RPC transport and TypeScript SDK/runtime into eight tools:
+Local stdio MCP server for the Android Use companion app. It adapts the authenticated RPC transport and TypeScript SDK/runtime into nine tools:
 
 - `android_status` — read current device/session status.
 - `android_pair` — submit a pairing code and wait for approval on the phone.
 - `android_snapshot` — read a bounded accessibility snapshot (`full`, `compact`, or `actionable`).
 - `android_screenshot` — capture a bounded PNG/JPEG image via Android's accessibility screenshot API; returns image content and separate metadata.
-- `android_open_app` — launch an app from the phone-side allowlist (`com.android.settings` or Android Use itself).
+- `android_open_app` — request launch of an app selected in the phone-side allowlist.
+- `android_list_apps` — list launcher-visible apps already selected for remote launch, with display names and package IDs.
 - `android_gesture` — perform a bounded `tap`, `longPress`, or `swipe`, or one supported global action (`back`, `home`, `recents`, `notifications`).
 - `android_execute` — execute bounded JavaScript in an isolated V8 runtime; multiple SDK operations can be batched into one call.
 - `android_disconnect` — close the current RPC connection.
@@ -16,6 +17,7 @@ Local stdio MCP server for the Android Use companion app. It adapts the authenti
 - Node.js `>=22`.
 - pnpm from the repository root.
 - A running Android Use companion with its TLS listener enabled.
+- Matching protocol v2 host and companion builds.
 - The phone's device certificate PEM and its SHA-256 fingerprint.
 
 ## Build
@@ -39,6 +41,8 @@ The CLI requires a secure WebSocket URL, device certificate path, and certificat
 | `--device-certificate` | `ANDROID_USE_DEVICE_CERTIFICATE` | PEM certificate used to authenticate/pin the phone |
 | `--device-certificate-pin` | `ANDROID_USE_DEVICE_CERTIFICATE_PIN` | SHA-256 certificate fingerprint (64 hex characters; colons are accepted) |
 | `--identity-dir` | `ANDROID_USE_IDENTITY_DIR` | Optional host identity directory; defaults to `~/.config/android-use-mcp` |
+
+The companion listener defaults to stable port `43419`; its phone-side **Connection and session** settings allow a custom port. Use the endpoint shown in Android Use for the MCP URL. The URL's IP can still change when the phone reconnects to Wi-Fi; a router DHCP reservation can keep that address stable.
 
 The host identity helper creates a client certificate and private key in a restricted local directory. Keep this directory private. To revoke a host, use the phone-side pairing controls; deleting the local identity does not revoke a certificate already approved by the phone.
 
@@ -72,7 +76,7 @@ See [`examples/basic-automation/index.ts`](../../examples/basic-automation/index
 
 Each execution uses a fresh isolate with bounded time, heap, result bytes/depth, logs, and action trace. Node globals, filesystem, child processes, and unrestricted network are not exposed. A successful action dispatch is not the same as verifying the requested task postcondition; inspect the returned action result and take a fresh snapshot when needed.
 
-The isolated SDK also supports `longClick()`, `clear()`, bounded `scrollUntilVisible(target, {direction, maxSteps})` (maximum 20 steps), `android.performGesture(...)`, `android.performGlobalAction(...)`, and allowlisted `android.launchApp(...)`. Each operation is independently bounded and re-resolves selectors before acting. Actions are dispatch outcomes, not proof of task completion.
+The isolated SDK also supports `longClick()`, `clear()`, bounded `scrollUntilVisible(target, {direction, maxSteps})` (maximum 20 steps), `android.performGesture(...)`, `android.performGlobalAction(...)`, `android.listApps()`, and `android.launchApp(...)`. Each operation is independently bounded and re-resolves selectors before acting. Actions are dispatch outcomes, not proof of task completion.
 
 ## Security and limitations
 
@@ -83,5 +87,5 @@ The isolated SDK also supports `longClick()`, `clear()`, bounded `scrollUntilVis
 - The server connects lazily when a device tool is called. MCP initialization and tool listing do not contact the phone.
 - Screenshot capture requires Android API 30+, the phone accessibility screenshot capability, an approved authenticated host, and an unprotected screen. Secure/protected content is rejected rather than replaced by a blank image; encoded image bytes are capped so the RPC frame remains below 2 MiB.
 - Wi-Fi listener exposure is a separate, explicit phone-side choice. The listener defaults to loopback/USB forwarding; pairing, TLS, certificate pinning, and phone approval remain required.
-- App launch is restricted by a fixed phone-side allowlist and Android package-visibility rules. Package availability and OS launch rejection are surfaced as safe typed errors.
+- App listing includes only launcher-visible packages selected in the phone's user-managed launch allowlist. App launch authorization is decided by that same phone-side allowlist; the host SDK only validates package syntax. Package availability and OS launch rejection are surfaced as safe typed errors. The host cannot change the phone's selection.
 - Secure/protected screens, OEM accessibility behavior, and the availability of an active phone-side session may limit snapshots or actions.

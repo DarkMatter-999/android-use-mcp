@@ -5,6 +5,32 @@ import org.junit.Test
 
 class LaunchableAppRepositoryTest {
     @Test
+    fun listsOnlyAllowedCurrentlyLaunchableDistinctPackages() {
+        val repository = LaunchableAppRepository {
+            listOf(
+                LauncherActivity("com.example.zed", "Zed", LauncherActions.MAIN, setOf(LauncherActions.LAUNCHER)),
+                LauncherActivity("com.example.calc", "Calculator", LauncherActions.MAIN, setOf(LauncherActions.LAUNCHER)),
+                LauncherActivity("com.example.calc", "Calculator secondary", LauncherActions.MAIN, setOf(LauncherActions.LAUNCHER)),
+                LauncherActivity("com.example.hidden", "Hidden", LauncherActions.MAIN, setOf(LauncherActions.LAUNCHER)),
+            )
+        }
+
+        assertEquals(
+            listOf(LaunchableApp("com.example.calc", "Calculator"), LaunchableApp("com.example.zed", "Zed")),
+            repository.listAllowedLaunchableApps(setOf("com.example.zed", "com.example.calc", "com.example.removed")),
+        )
+    }
+
+    @Test
+    fun emptyAllowedPackagesReturnsNoApps() {
+        val repository = LaunchableAppRepository {
+            listOf(LauncherActivity("com.example.calc", "Calculator", LauncherActions.MAIN, setOf(LauncherActions.LAUNCHER)))
+        }
+
+        assertEquals(emptyList<LaunchableApp>(), repository.listAllowedLaunchableApps(emptySet()))
+    }
+
+    @Test
     fun includesOnlyLauncherActivitiesAndCollapsesPackages() {
         val repository = LaunchableAppRepository {
             listOf(

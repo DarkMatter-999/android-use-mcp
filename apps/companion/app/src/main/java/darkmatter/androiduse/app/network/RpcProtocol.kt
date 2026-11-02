@@ -23,7 +23,7 @@ import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.put
 
 /** Protocol version carried by every RPC envelope. */
-const val PROTOCOL_VERSION: Int = 1
+const val PROTOCOL_VERSION: Int = 2
 
 /** Maximum UTF-8 encoded frame size, measured before JSON parsing. */
 const val MAX_FRAME_BYTES: Int = 2 * 1024 * 1024
@@ -262,7 +262,7 @@ data class ActionResult(
  */
 object RpcProtocol {
 
-    /** Method names frozen for protocol version 1. */
+    /** Method names frozen for protocol version 2. */
     val RPC_METHODS: List<String> = listOf(
         "device.status",
         "pairing.begin",
@@ -276,6 +276,7 @@ object RpcProtocol {
         "gesture.perform",
         "screenshot.capture",
         "app.launch",
+        "app.list",
         RPC_CANCEL_METHOD,
     )
 

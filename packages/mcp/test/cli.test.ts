@@ -18,6 +18,7 @@ function createServices(overrides: Partial<CliServices> = {}) {
       width: 1, height: 1, timestampMillis: 1, deviceId: 'device', windowId: 'window',
     })),
     openApp: vi.fn(async (packageName: string) => ({ launched: true, packageName })),
+    listApps: vi.fn(async () => ({ apps: [] })),
     gesture: vi.fn(async () => ({ accepted: true })),
   } satisfies McpToolDependencies;
   const services: CliServices = {

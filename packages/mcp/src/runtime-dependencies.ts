@@ -61,6 +61,7 @@ export function createRuntimeDependencies(
       return { disconnected: true };
     },
     screenshot: async () => (await connectedDevice()).screenshot(),
+    listApps: async () => (await connectedDevice()).listApps(),
     openApp: async (packageName, timeoutMs) => (await connectedDevice()).launchApp(packageName, { timeoutMs }),
     gesture: async (input: McpGestureInput) => {
       const device = await connectedDevice();

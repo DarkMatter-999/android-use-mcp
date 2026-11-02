@@ -9,6 +9,30 @@ import darkmatter.androiduse.app.pairing.PairingStore
 import kotlinx.serialization.json.JsonObject
 
 class CompanionRpcHandlerTest {
+    @Test fun appListIsRejectedBeforeApprovalAndDispatchedAfterApproval() {
+        val identity = TestTlsIdentity.load(javaClass, "client-fixture")
+        val manager = PairingManager(object : PairingStore {
+            private var records = emptyList<HostRecord>()
+            override fun load() = records
+            override fun save(records: List<HostRecord>) { this.records = records }
+        })
+        val challenge = manager.begin()
+        manager.submit(challenge.code, HOST_ID, "Test Host", identity.certificate)
+        val dispatched = mutableListOf<String>()
+        val handler = CompanionRpcHandler(manager, businessDispatcher = { request, _ ->
+            dispatched += request.method
+            RpcResponse(PROTOCOL_VERSION, request.requestId, result = JsonObject(emptyMap()))
+        })
+        val session = SessionIdentity(identity.certificate)
+        val request = RpcRequest(PROTOCOL_VERSION, REQUEST_ID, "app.list", JsonObject(emptyMap()))
+
+        assertEquals(RpcErrorCode.PAIRING_REQUIRED, handler.handle(request, session).error?.code)
+        assertTrue(dispatched.isEmpty())
+        manager.approve(HOST_ID)
+        assertEquals(null, handler.handle(request, session).error)
+        assertEquals(listOf("app.list"), dispatched)
+    }
+
     @Test fun screenshotIsRejectedBeforeHostApprovalAndDispatchedAfterApproval() {
         val identity = TestTlsIdentity.load(javaClass, "client-fixture")
         val manager = PairingManager(object : PairingStore {

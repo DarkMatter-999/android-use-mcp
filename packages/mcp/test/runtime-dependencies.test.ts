@@ -39,6 +39,7 @@ class FakeConnection {
       timestampMillis: 123, deviceId: 'device-1', windowId: 'window-1',
     };
     if (method === 'app.launch') return { launched: true, packageName: params['packageName'] };
+    if (method === 'app.list') return { apps: [{ name: 'Calculator', packageName: 'com.example.calc' }] };
     if (method === 'element.action' || method === 'gesture.perform') return {
       actionId: 'action-1', action: params['action'], accepted: true, verified: null,
       revisionBefore: 1, revisionAfter: 1,
@@ -119,6 +120,16 @@ describe('lazy MCP runtime dependencies', () => {
       mimeType: 'image/jpeg', width: 10, height: 20, deviceId: 'device-1',
     });
     expect(connection.request).toHaveBeenCalledWith('screenshot.capture', {}, undefined);
+  });
+
+  it('delegates app listing to the same authenticated Android device', async () => {
+    const connection = new FakeConnection();
+    const dependencies = createRuntimeDependencies(config, { connect: async () => connection as unknown as RpcConnection });
+
+    await expect(dependencies.listApps()).resolves.toEqual({
+      apps: [{ name: 'Calculator', packageName: 'com.example.calc' }],
+    });
+    expect(connection.request).toHaveBeenCalledWith('app.list', {}, undefined);
   });
 
   it('delegates app launch and coordinate/global actions to the same device instance', async () => {

@@ -69,7 +69,7 @@ const MUTATIONS: ReadonlyArray<{ name: string; code: RpcErrorCode; apply: (value
     name: 'unknown-version',
     code: 'UNSUPPORTED_VERSION',
     apply: (value) => {
-      value['protocolVersion'] = 2;
+      value['protocolVersion'] = 1;
     },
   },
   {
@@ -113,7 +113,7 @@ function oversizedMutation(value: JsonObject, kind: FixtureKind): number {
 }
 
 describe('shared protocol fixtures', () => {
-  it('contains exactly the three documented v1 fixtures', () => {
+  it('contains exactly the five documented v2 fixtures', () => {
     expect(readdirSync(fixturesUrl).sort()).toEqual(FIXTURE_NAMES);
   });
 
@@ -123,15 +123,15 @@ describe('shared protocol fixtures', () => {
       const value = parseJsonObject(raw);
       const kind = fixtureKind(value);
 
-      it('is a v1 frame below the 2 MiB UTF-8 cap', () => {
-        expect(value['protocolVersion']).toBe(1);
+      it('is a v2 frame below the 2 MiB UTF-8 cap', () => {
+        expect(value['protocolVersion']).toBe(2);
         expect(Buffer.byteLength(raw, 'utf8')).toBeLessThan(MAX_FRAME_BYTES);
       });
 
       it('is accepted by the matching parser', () => {
         const parsed = accept(kind, raw);
 
-        expect(parsed.protocolVersion).toBe(1);
+        expect(parsed.protocolVersion).toBe(2);
         expect(parsed.requestId).toBe(value['requestId']);
       });
 

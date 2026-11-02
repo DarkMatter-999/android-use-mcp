@@ -1,5 +1,5 @@
 {
-  "protocolVersion": 1,
+  "protocolVersion": 2,
   "requestId": "3f8c8b1e-2e4a-4f6b-9c7d-5a1b2c3d4e5f",
   "method": "device.status",
   "params": {}

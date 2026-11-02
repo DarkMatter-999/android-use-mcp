@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import darkmatter.androiduse.app.accessibility.ServicePreferences
+import darkmatter.androiduse.app.accessibility.ListenerPortConfig
 import darkmatter.androiduse.app.accessibility.ServiceState
 import darkmatter.androiduse.app.accessibility.SessionNotification
 import darkmatter.androiduse.app.accessibility.TransportKind
@@ -56,6 +57,7 @@ data class HomeUiState(
     val launchableApps: List<LaunchableApp> = emptyList(),
     val allowedLaunchPackages: Set<String> = emptySet(),
     val keepScreenOnEnabled: Boolean = false,
+    val listenerPortSetting: Int = ListenerPortConfig.DEFAULT_PORT,
 ) {
     override fun toString(): String = "HomeUiState(deviceModel=$deviceModel, apiLevel=$apiLevel, " +
         "accessibilityEnabled=$accessibilityEnabled, accessibilityConnected=$accessibilityConnected, " +
@@ -236,6 +238,13 @@ class HomeViewModel(
         mutableState.value = mutableState.value.copy(keepScreenOnEnabled = enabled)
     }
 
+    fun setListenerPort(port: Int) {
+        if (UseService.state.value.remoteEnabled || port !in 1024..65535) return
+        ServicePreferences.setListenerPort(appContext, port)
+        mutableState.value = mutableState.value.copy(listenerPortSetting = port)
+        statusOverride.value = "Listener port saved. It applies the next time remote control starts."
+    }
+
     fun beginPairing() {
         val challenge = UseService.beginPairing(appContext)
         statusOverride.value = if (challenge != null) {
@@ -316,6 +325,7 @@ class HomeViewModel(
             launchableApps = launchableApps,
             allowedLaunchPackages = allowedLaunchPackages,
             keepScreenOnEnabled = ServicePreferences.isKeepScreenOnEnabled(appContext),
+            listenerPortSetting = ServicePreferences.listenerPort(appContext),
         )
     }
 }

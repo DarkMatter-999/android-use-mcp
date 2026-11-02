@@ -178,6 +178,19 @@ internal object WifiAddressSelector {
     }
 }
 
+object ListenerPortConfig {
+    const val DEFAULT_PORT = 43419
+    private const val MIN_CUSTOM_PORT = 1024
+    private const val MAX_PORT = 65535
+
+    fun parse(value: String?): Int? {
+        if (value == null || value.isBlank() || value.trim().equals("default", ignoreCase = true)) {
+            return DEFAULT_PORT
+        }
+        return value.trim().toIntOrNull()?.takeIf { it in MIN_CUSTOM_PORT..MAX_PORT }
+    }
+}
+
 /**
  * Local, user-controlled preferences. They are intentionally not credentials and
  * cannot enable Android accessibility on their own.
@@ -195,6 +208,14 @@ object ServicePreferences {
     private const val KEY_OVERLAY_CURSOR = "overlay_cursor"
     private const val KEY_ALLOWED_LAUNCH_PACKAGES = "allowed_launch_packages"
     private const val KEY_KEEP_SCREEN_ON = "keep_screen_on_during_remote_control"
+    private const val KEY_LISTENER_PORT = "listener_port"
+
+    fun listenerPort(context: Context): Int = prefs(context).getInt(KEY_LISTENER_PORT, ListenerPortConfig.DEFAULT_PORT)
+
+    fun setListenerPort(context: Context, port: Int) {
+        require(port in 1024..65535)
+        prefs(context).edit { putInt(KEY_LISTENER_PORT, port) }
+    }
 
     fun allowedLaunchPackages(context: Context): Set<String> =
         prefs(context).getStringSet(KEY_ALLOWED_LAUNCH_PACKAGES, emptySet()).orEmpty().toSet()

@@ -24,6 +24,7 @@ export interface McpToolDependencies {
   disconnect(): Promise<unknown>;
   screenshot(): Promise<McpScreenshot>;
   openApp(packageName: string, timeoutMs: number): Promise<unknown>;
+  listApps(): Promise<unknown>;
   gesture(input: McpGestureInput): Promise<unknown>;
 }
 
@@ -37,6 +38,7 @@ const safeHostName = z.string()
 export const statusToolSchema = noInputSchema;
 export const disconnectToolSchema = noInputSchema;
 export const screenshotToolSchema = noInputSchema;
+export const listAppsToolSchema = noInputSchema;
 const packageNameSchema = z.string().max(255).regex(/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$/);
 export const openAppToolSchema = z.object({
   packageName: packageNameSchema,
@@ -82,6 +84,10 @@ export function createToolHandlers(dependencies: McpToolDependencies) {
     android_screenshot: async (input: unknown) => {
       screenshotToolSchema.parse(input);
       return dependencies.screenshot();
+    },
+    android_list_apps: async (input: unknown) => {
+      listAppsToolSchema.parse(input);
+      return dependencies.listApps();
     },
     android_open_app: async (input: unknown) => {
       const parsed = openAppToolSchema.parse(input);

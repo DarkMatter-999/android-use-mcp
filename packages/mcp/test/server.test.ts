@@ -18,6 +18,7 @@ function fakeDependencies(overrides: Partial<McpToolDependencies> = {}): McpTool
       width: 10, height: 20, timestampMillis: 123, deviceId: 'device', windowId: 'window',
     })),
     openApp: vi.fn(async (packageName) => ({ launched: true, packageName })),
+    listApps: vi.fn(async () => ({ apps: [{ name: 'Calculator', packageName: 'com.example.calc' }] })),
     gesture: vi.fn(async (input) => ({ accepted: true, input })),
     ...overrides,
   };
@@ -37,7 +38,7 @@ describe('Android MCP server', () => {
     const listed = await client.listTools();
     expect(listed.tools.map(({ name }) => name)).toEqual([
       'android_status', 'android_pair', 'android_snapshot', 'android_screenshot',
-      'android_open_app', 'android_gesture', 'android_execute', 'android_disconnect',
+      'android_open_app', 'android_list_apps', 'android_gesture', 'android_execute', 'android_disconnect',
     ]);
     expect(listed.tools.find(({ name }) => name === 'android_pair')?.inputSchema.required)
       .toEqual(['code', 'hostName']);
@@ -52,6 +53,8 @@ describe('Android MCP server', () => {
     expect(dependencies.status).toHaveBeenCalledTimes(1);
 
     await client.callTool({ name: 'android_open_app', arguments: { packageName: 'com.android.settings' } });
+    const apps = await client.callTool({ name: 'android_list_apps', arguments: {} });
+    expect(apps.structuredContent).toEqual({ result: { apps: [{ name: 'Calculator', packageName: 'com.example.calc' }] } });
     await client.callTool({ name: 'android_gesture', arguments: { action: 'back' } });
     expect(dependencies.openApp).toHaveBeenCalledWith('com.android.settings', 5_000);
     expect(dependencies.gesture).toHaveBeenCalledWith({ action: 'back', timeoutMs: 5_000 });

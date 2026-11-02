@@ -1,5 +1,5 @@
-import type { Selector, UiSnapshot } from '@android-use/protocol';
-import { RemoteRpcError, type RpcConnection } from '@android-use/transport';
+import type { AndroidAppList, Selector, UiSnapshot } from '@android-use/protocol';
+import type { RpcConnection } from '@android-use/transport';
 import { Locator } from './locator.js';
 import {
   descriptionSelector,
@@ -48,9 +48,6 @@ export interface GestureOptions {
   signal?: AbortSignal;
 }
 
-/** Phone-side launch policy is authoritative; this client mirror fails closed early. */
-export const ANDROID_APP_LAUNCH_ALLOWLIST = ['com.android.settings', 'darkmatter.androiduse.app'] as const;
-
 export class AndroidDevice {
   constructor(private readonly connection: RpcConnection) {}
 
@@ -65,6 +62,10 @@ export class AndroidDevice {
   async screenshot(options: Pick<SnapshotOptions, 'timeoutMs' | 'signal'> = {}): Promise<DeviceScreenshot> {
     const response = await this.connection.request<unknown>('screenshot.capture', {}, requestOptions(options));
     return decodeScreenshot(response);
+  }
+
+  listApps(options: Pick<SnapshotOptions, 'timeoutMs' | 'signal'> = {}): Promise<AndroidAppList> {
+    return this.connection.request<AndroidAppList>('app.list', {}, requestOptions(options));
   }
 
   async performGesture(kind: GestureKind, gesture: GestureOptions): Promise<import('@android-use/protocol').ActionResult> {
@@ -86,9 +87,6 @@ export class AndroidDevice {
   launchApp(packageName: string, options: Pick<SnapshotOptions, 'timeoutMs' | 'signal'> = {}): Promise<{ launched: true; packageName: string }> {
     if (typeof packageName !== 'string' || !/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$/.test(packageName)) {
       throw new TypeError('package name is invalid');
-    }
-    if (!(ANDROID_APP_LAUNCH_ALLOWLIST as readonly string[]).includes(packageName)) {
-      throw new RemoteRpcError('UNAUTHORIZED', 'App package is not allowlisted on the phone', { reason: 'NOT_ALLOWLISTED' });
     }
     return this.connection.request('app.launch', { packageName }, requestOptions(options));
   }

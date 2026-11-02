@@ -34,7 +34,7 @@ class RpcProtocolTest {
     )
 
     private val framePrefix =
-        "{\"protocolVersion\":1,\"requestId\":\"$requestId\",\"method\":\"device.status\",\"params\":{\"pad\":\""
+        "{\"protocolVersion\":2,\"requestId\":\"$requestId\",\"method\":\"device.status\",\"params\":{\"pad\":\""
     private val frameSuffix = "\"}}"
 
     // ---------------------------------------------------------------- fixtures
@@ -127,7 +127,7 @@ class RpcProtocolTest {
     fun `rejects the same shared mutations as the host`() {
         val mutations = listOf(
             Mutation("unknown-version", RpcErrorCode.UNSUPPORTED_VERSION) {
-                this["protocolVersion"] = JsonPrimitive(2)
+                this["protocolVersion"] = JsonPrimitive(3)
             },
             Mutation("missing-request-id", RpcErrorCode.INVALID_MESSAGE) {
                 remove("requestId")
@@ -195,6 +195,7 @@ class RpcProtocolTest {
                 "gesture.perform",
                 "screenshot.capture",
                 "app.launch",
+                "app.list",
                 "rpc.cancel",
             ),
             RpcProtocol.RPC_METHODS,
@@ -229,7 +230,7 @@ class RpcProtocolTest {
     fun `frame and method limits match the host`() {
         assertEquals(2 * 1024 * 1024, MAX_FRAME_BYTES)
         assertEquals(128, MAX_METHOD_LENGTH)
-        assertEquals(1, PROTOCOL_VERSION)
+        assertEquals(2, PROTOCOL_VERSION)
     }
 
     // -------------------------------------------------------- shared fixtures
@@ -238,7 +239,7 @@ class RpcProtocolTest {
     fun `accepts the shared status request fixture`() {
         val request = RpcProtocol.parseRequest(fixture("status-request.json")).expectSuccess()
 
-        assertEquals(1, request.protocolVersion)
+        assertEquals(2, request.protocolVersion)
         assertEquals(requestId, request.requestId)
         assertEquals("device.status", request.method)
         assertTrue(request.params.isEmpty())
@@ -413,7 +414,7 @@ class RpcProtocolTest {
     @Test
     fun `serializes a request equal to the shared fixture`() {
         val request = RpcRequest(
-            protocolVersion = 1,
+            protocolVersion = 2,
             requestId = requestId,
             method = "device.status",
             params = JsonObject(emptyMap()),
@@ -454,7 +455,7 @@ class RpcProtocolTest {
             truncated = false,
         )
         val response = RpcResponse(
-            protocolVersion = 1,
+            protocolVersion = 2,
             requestId = snapshotRequestId,
             result = RpcProtocol.encodeSnapshot(snapshot),
         )
@@ -473,7 +474,7 @@ class RpcProtocolTest {
                 put("currentRevision", 9)
             },
         )
-        val response = RpcResponse(protocolVersion = 1, requestId = actionRequestId, error = error)
+        val response = RpcResponse(protocolVersion = 2, requestId = actionRequestId, error = error)
 
         assertEquals(fixtureObject("action-error.json"), Json.parseToJsonElement(RpcProtocol.serialize(response)))
     }
@@ -481,12 +482,12 @@ class RpcProtocolTest {
     @Test
     fun `refuses to serialize an invalid or oversized local message`() {
         val wrongVersion = assertThrows(RpcProtocolException::class.java) {
-            RpcProtocol.serialize(RpcResponse(protocolVersion = 2, requestId = requestId))
+            RpcProtocol.serialize(RpcResponse(protocolVersion = 1, requestId = requestId))
         }
         assertEquals(RpcErrorCode.UNSUPPORTED_VERSION, wrongVersion.error.code)
 
         val oversized = RpcRequest(
-            protocolVersion = 1,
+            protocolVersion = 2,
             requestId = requestId,
             method = "device.status",
             params = buildJsonObject { put("pad", "a".repeat(MAX_FRAME_BYTES)) },
@@ -547,7 +548,15 @@ class RpcProtocolTest {
     fun `rejects unknown protocol versions for requests and responses`() {
         assertEquals(
             RpcErrorCode.UNSUPPORTED_VERSION,
-            requestFailure(mutate("status-request.json") { this["protocolVersion"] = JsonPrimitive(2) }),
+            requestFailure(mutate("status-request.json") { this["protocolVersion"] = JsonPrimitive(1) }),
+        )
+        assertEquals(
+            RpcErrorCode.UNSUPPORTED_VERSION,
+            requestFailure(mutate("status-request.json") { this["protocolVersion"] = JsonPrimitive(3) }),
+        )
+        assertEquals(
+            RpcErrorCode.UNSUPPORTED_VERSION,
+            responseFailure(mutate("snapshot-response.json") { this["protocolVersion"] = JsonPrimitive(1) }),
         )
         assertEquals(
             RpcErrorCode.UNSUPPORTED_VERSION,

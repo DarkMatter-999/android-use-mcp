@@ -15,6 +15,7 @@ function createDependencies() {
       width: 10, height: 20, timestampMillis: 123, deviceId: 'device-1', windowId: 'window-1',
     })),
     openApp: vi.fn(async (packageName: string, _timeoutMs: number) => ({ launched: true, packageName })),
+    listApps: vi.fn(async () => ({ apps: [{ name: 'Calculator', packageName: 'com.example.calc' }] })),
     gesture: vi.fn(async (input: unknown) => ({ action: input, accepted: true })),
   };
 }
@@ -43,6 +44,7 @@ describe('MCP tool handlers', () => {
     const tools = createToolHandlers(deps);
     const invalidCalls: Array<() => Promise<unknown>> = [
       () => tools.android_status({ unexpected: true }),
+      () => tools.android_list_apps({ unexpected: true }),
       () => tools.android_pair({ code: 'bad', hostName: 'OpenCode' }),
       () => tools.android_pair({ code: 'ABCDEFGH', hostName: '   ' }),
       () => tools.android_pair({ code: 'ABCDEFGH', hostName: 'x'.repeat(65) }),
@@ -71,6 +73,7 @@ describe('MCP tool handlers', () => {
     expect(deps.disconnect).not.toHaveBeenCalled();
     expect(deps.screenshot).not.toHaveBeenCalled();
     expect(deps.openApp).not.toHaveBeenCalled();
+    expect(deps.listApps).not.toHaveBeenCalled();
     expect(deps.gesture).not.toHaveBeenCalled();
   });
 
@@ -98,6 +101,16 @@ describe('MCP tool handlers', () => {
       action: 'swipe', x: 1, y: 2, endX: 10, endY: 20, durationMillis: 200, timeoutMs: 900,
     });
     expect(deps.gesture).toHaveBeenNthCalledWith(2, { action: 'back', timeoutMs: 5_000 });
+  });
+
+  it('delegates strict no-input app listing and preserves its result', async () => {
+    const deps = createDependencies();
+    const tools = createToolHandlers(deps);
+
+    await expect(tools.android_list_apps({})).resolves.toEqual({
+      apps: [{ name: 'Calculator', packageName: 'com.example.calc' }],
+    });
+    expect(deps.listApps).toHaveBeenCalledOnce();
   });
 
   it('maps known transport and runtime errors to actionable safe guidance', () => {

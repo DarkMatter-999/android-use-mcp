@@ -36,7 +36,7 @@ describe('protocol constants and error codes', () => {
     expect(MAX_METHOD_LENGTH).toBe(128);
   });
 
-  it('freezes the v1 method list and measures frames in UTF-8 bytes', () => {
+  it('freezes the v2 method list and measures frames in UTF-8 bytes', () => {
     expect(RPC_METHODS).toEqual([
       'device.status',
       'pairing.begin',
@@ -50,6 +50,7 @@ describe('protocol constants and error codes', () => {
       'gesture.perform',
       'screenshot.capture',
       'app.launch',
+      'app.list',
       'rpc.cancel',
     ]);
     expect(measureFrameBytes('€')).toBe(3);

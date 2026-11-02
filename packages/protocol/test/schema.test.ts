@@ -40,7 +40,7 @@ function expectCode(run: () => unknown, code: RpcErrorCode): RpcProtocolError {
 
 function request(overrides: Partial<Record<string, unknown>> = {}): unknown {
   return {
-    protocolVersion: 1,
+    protocolVersion: 2,
     requestId: REQUEST_ID,
     method: 'device.status',
     params: {},
@@ -50,7 +50,7 @@ function request(overrides: Partial<Record<string, unknown>> = {}): unknown {
 
 function response(overrides: Partial<Record<string, unknown>> = {}): unknown {
   return {
-    protocolVersion: 1,
+    protocolVersion: 2,
     requestId: REQUEST_ID,
     result: { ok: true },
     ...overrides,
@@ -62,10 +62,10 @@ function serializedRequest(overrides: Partial<Record<string, unknown>> = {}): st
 }
 
 describe('parseRpcRequest', () => {
-  it('accepts a valid v1 request and returns the typed value', () => {
+  it('accepts a valid v2 request and returns the typed value', () => {
     const parsed: RpcRequest = parseRpcRequest(serializedRequest());
 
-    expect(parsed.protocolVersion).toBe(1);
+    expect(parsed.protocolVersion).toBe(2);
     expect(parsed.requestId).toBe(REQUEST_ID);
     expect(parsed.method).toBe('device.status');
     expect(parsed.params).toEqual({});
@@ -77,8 +77,17 @@ describe('parseRpcRequest', () => {
     expect(parsed.method).toBe('future.method');
   });
 
+  it('accepts the v2 app.list method', () => {
+    expect(parseRpcRequest(serializedRequest({ method: 'app.list' }))).toMatchObject({
+      protocolVersion: 2,
+      method: 'app.list',
+      params: {},
+    });
+  });
+
   it('rejects an unknown protocol version with UNSUPPORTED_VERSION', () => {
-    expectCode(() => parseRpcRequest(serializedRequest({ protocolVersion: 2 })), 'UNSUPPORTED_VERSION');
+    expectCode(() => parseRpcRequest(serializedRequest({ protocolVersion: 1 })), 'UNSUPPORTED_VERSION');
+    expectCode(() => parseRpcRequest(serializedRequest({ protocolVersion: 3 })), 'UNSUPPORTED_VERSION');
     expectCode(() => parseRpcRequest(serializedRequest({ protocolVersion: 0 })), 'UNSUPPORTED_VERSION');
     expectCode(() => parseRpcRequest(serializedRequest({ protocolVersion: '1' })), 'UNSUPPORTED_VERSION');
   });
@@ -135,7 +144,7 @@ describe('parseRpcRequest', () => {
   });
 
   it('requires rpc.cancel to name the active operation', () => {
-    const cancel = { protocolVersion: 1, requestId: REQUEST_ID, method: 'rpc.cancel', params: { cancelRequestId: CANCEL_ID } };
+    const cancel = { protocolVersion: 2, requestId: REQUEST_ID, method: 'rpc.cancel', params: { cancelRequestId: CANCEL_ID } };
 
     expect(parseRpcRequest(JSON.stringify(cancel)).params).toEqual({ cancelRequestId: CANCEL_ID });
 
@@ -159,7 +168,7 @@ describe('parseRpcRequest', () => {
 });
 
 describe('frame size limits', () => {
-  const prefix = `{"protocolVersion":1,"requestId":"${REQUEST_ID}","method":"device.status","params":{"pad":"`;
+  const prefix = `{"protocolVersion":2,"requestId":"${REQUEST_ID}","method":"device.status","params":{"pad":"`;
   const suffix = '"}}';
 
   function frameOfBytes(bytes: number): string {
@@ -198,7 +207,7 @@ describe('parseRpcResponse', () => {
   it('accepts a result response', () => {
     const parsed: RpcResponse = parseRpcResponse(JSON.stringify(response()));
 
-    expect(parsed.protocolVersion).toBe(1);
+    expect(parsed.protocolVersion).toBe(2);
     expect(parsed.requestId).toBe(REQUEST_ID);
     expect(parsed.result).toEqual({ ok: true });
     expect(parsed.error).toBeUndefined();
@@ -233,6 +242,7 @@ describe('parseRpcResponse', () => {
   });
 
   it('rejects unknown protocol versions', () => {
+    expectCode(() => parseRpcResponse(JSON.stringify(response({ protocolVersion: 1 }))), 'UNSUPPORTED_VERSION');
     expectCode(() => parseRpcResponse(JSON.stringify(response({ protocolVersion: 3 }))), 'UNSUPPORTED_VERSION');
   });
 
@@ -300,13 +310,13 @@ describe('parseRpcResponse', () => {
 describe('serializeRpcMessage', () => {
   it('serializes requests and responses that parse back to the same value', () => {
     const requestValue: RpcRequest = {
-      protocolVersion: 1,
+      protocolVersion: 2,
       requestId: REQUEST_ID,
       method: 'device.status',
       params: {},
     };
     const responseValue: RpcResponse = {
-      protocolVersion: 1,
+      protocolVersion: 2,
       requestId: REQUEST_ID,
       result: { status: 'idle' },
     };
@@ -317,15 +327,15 @@ describe('serializeRpcMessage', () => {
 
   it('refuses to serialize an invalid envelope and returns typed errors', () => {
     expectCode(
-      () => serializeRpcMessage({ protocolVersion: 2, requestId: REQUEST_ID, method: 'x', params: {} } as never),
+      () => serializeRpcMessage({ protocolVersion: 1, requestId: REQUEST_ID, method: 'x', params: {} } as never),
       'UNSUPPORTED_VERSION',
     );
     expectCode(
-      () => serializeRpcMessage({ protocolVersion: 1, requestId: 'nope', method: 'x', params: {} } as never),
+      () => serializeRpcMessage({ protocolVersion: 2, requestId: 'nope', method: 'x', params: {} } as never),
       'INVALID_MESSAGE',
     );
     expectCode(
-      () => serializeRpcMessage({ protocolVersion: 1, requestId: REQUEST_ID, method: 'rpc.cancel', params: {} }),
+      () => serializeRpcMessage({ protocolVersion: 2, requestId: REQUEST_ID, method: 'rpc.cancel', params: {} }),
       'INVALID_MESSAGE',
     );
     expectCode(() => serializeRpcMessage(null as never), 'INVALID_MESSAGE');
@@ -333,7 +343,7 @@ describe('serializeRpcMessage', () => {
 
   it('refuses to emit a frame larger than 2 MiB', () => {
     const oversized: RpcRequest = {
-      protocolVersion: 1,
+      protocolVersion: 2,
       requestId: REQUEST_ID,
       method: 'device.status',
       params: { pad: 'a'.repeat(MAX_FRAME_BYTES) },
@@ -413,4 +423,3 @@ describe('selectorSchema', () => {
     }
   });
 });
-

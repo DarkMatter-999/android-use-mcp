@@ -11,6 +11,17 @@ import org.junit.Test
 
 class TransportLifecycleTest {
     @Test
+    fun `listener port uses a stable default and accepts valid custom ports`() {
+        assertEquals(43419, ListenerPortConfig.parse(null))
+        assertEquals(43419, ListenerPortConfig.parse(""))
+        assertEquals(43419, ListenerPortConfig.parse(" default "))
+        assertEquals(55000, ListenerPortConfig.parse("55000"))
+        assertNull(ListenerPortConfig.parse("not a port"))
+        assertNull(ListenerPortConfig.parse("1023"))
+        assertNull(ListenerPortConfig.parse("65536"))
+    }
+
+    @Test
     fun `service restart does not implicitly restore remote or wifi exposure`() {
         assertFalse(RemoteControlToggle.restoreAfterServiceRestart(savedRemoteEnabled = true))
         assertFalse(RemoteControlToggle.restoreAfterServiceRestart(savedRemoteEnabled = false))

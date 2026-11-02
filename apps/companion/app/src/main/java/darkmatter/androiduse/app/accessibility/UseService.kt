@@ -55,6 +55,7 @@ import darkmatter.androiduse.app.selectors.NodePathStaleException
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.net.BindException
 import darkmatter.androiduse.app.network.BindMode
 import darkmatter.androiduse.app.network.CompanionRpcHandler
 import darkmatter.androiduse.app.network.DeviceTls
@@ -76,6 +77,9 @@ import darkmatter.androiduse.app.security.DeviceIdentity
 import darkmatter.androiduse.app.screenshots.ScreenshotCapture
 import darkmatter.androiduse.app.screenshots.ScreenshotResult
 import darkmatter.androiduse.app.network.ScreenshotRpcResult
+import darkmatter.androiduse.app.network.AppListRpcResult
+import darkmatter.androiduse.app.apps.LaunchableAppRepository
+import darkmatter.androiduse.app.apps.PackageManagerLauncherActivitySource
 import darkmatter.androiduse.app.overlay.InspectorOverlay
 import darkmatter.androiduse.app.overlay.OverlayDisplay
 import darkmatter.androiduse.app.overlay.OverlayModel
@@ -137,7 +141,10 @@ class UseService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        transportLifecycle = TransportLifecycle(::startTransport, ::stopTransport)
+        transportLifecycle = TransportLifecycle(
+            start = { mode -> startTransport(mode, ServicePreferences.listenerPort(this)) },
+            stop = ::stopTransport,
+        )
         connected = true
         lastError = null
         inspectorOverlay = runCatching { InspectorOverlay(this, onError = ::recordOverlayError) }.getOrNull()
@@ -604,7 +611,11 @@ class UseService : AccessibilityService() {
                 current?.transportLifecycleDisable()
                 current?.clearSession()
             } else if (enabled) {
-                current?.setTransportError("Remote listener failed to start; remote control remains off")
+                current?.let { service ->
+                    service.setTransportError(
+                        service.lastError ?: "Remote listener failed to start; remote control remains off",
+                    )
+                }
             }
             current?.updateKeepScreenOn()
             current?.publishState() ?: publishCompanionState(appContext)
@@ -672,7 +683,9 @@ class UseService : AccessibilityService() {
                 ServicePreferences.setRemoteEnabled(context.applicationContext, false)
                 SessionNotification.cancel(context.applicationContext)
                 service.clearSession()
-                service.setTransportError("Listener could not be restarted; remote control was stopped")
+                service.setTransportError(
+                    service.lastError ?: "Listener could not be restarted; remote control was stopped",
+                )
             }
             service.updateKeepScreenOn()
             service.publishState()
@@ -730,7 +743,7 @@ class UseService : AccessibilityService() {
 
     private fun transportLifecycleLoopback(): Boolean = transportLifecycle?.enableLoopback() == true
 
-    private fun startTransport(mode: BindMode): RpcEndpoint {
+    private fun startTransport(mode: BindMode, port: Int): RpcEndpoint {
         val certificate = DeviceIdentity.getOrCreate(this)
         val pairing = pairingManager ?: PairingManager(SharedPreferencesPairingStore(this)).also { pairingManager = it }
         val cancellations = java.util.concurrent.ConcurrentHashMap<String, ActionCancellation>()
@@ -768,13 +781,16 @@ class UseService : AccessibilityService() {
             sessionStopRequested = { stopRemoteFromController() },
         )
         return try {
-            server.start(mode).also {
+            server.start(mode, port).also {
                 deviceCertificate = certificate
                 rpcServer = server
                 transport = if (mode is BindMode.Wifi) TransportKind.WIFI else TransportKind.NONE
                 lastError = null
             }
         } catch (error: Exception) {
+            if (error is BindException) {
+                lastError = "Listener port $port is already in use. Choose another port in Connection and session."
+            }
             server.close()
             throw error
         }
@@ -812,6 +828,10 @@ class UseService : AccessibilityService() {
     ): RpcResponse {
         return try {
             val result = when (request.method) {
+                "app.list" -> AppListRpcResult.encode(
+                    LaunchableAppRepository(PackageManagerLauncherActivitySource(packageManager))
+                        .listAllowedLaunchableApps(ServicePreferences.allowedLaunchPackages(this)),
+                )
                 "app.launch" -> {
                     val packageName = (request.params["packageName"] as? kotlinx.serialization.json.JsonPrimitive)
                         ?.takeIf { it.isString }?.content

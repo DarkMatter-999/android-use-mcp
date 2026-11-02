@@ -12,6 +12,7 @@ import {
   statusToolSchema,
   screenshotToolSchema,
   openAppToolSchema,
+  listAppsToolSchema,
   gestureToolSchema,
   type McpToolDependencies,
 } from './tools.js';
@@ -70,6 +71,7 @@ export function createAndroidMcpServer(dependencies: McpToolDependencies): McpSe
     }
   }) as never);
   register('android_open_app', 'Launch a phone-allowlisted Android app.', tools.android_open_app, openAppToolSchema);
+  register('android_list_apps', 'List launcher-visible apps allowed for remote launch on the phone.', tools.android_list_apps, listAppsToolSchema);
   register('android_gesture', 'Perform a bounded coordinate gesture or supported global action.', tools.android_gesture, gestureToolSchema);
   register('android_execute', 'Run bounded JavaScript in an isolated runtime with the Android SDK bridge.', tools.android_execute, executeToolSchema);
   register('android_disconnect', 'Close the active Android RPC connection.', tools.android_disconnect, disconnectToolSchema);

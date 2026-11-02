@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -33,6 +34,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -50,6 +52,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -59,6 +62,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import darkmatter.androiduse.app.accessibility.TransportKind
+import darkmatter.androiduse.app.accessibility.ListenerPortConfig
 import darkmatter.androiduse.app.actions.ActionLogEntry
 import darkmatter.androiduse.app.overlay.OverlayOptions
 import darkmatter.androiduse.app.apps.LaunchableApp
@@ -124,6 +128,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
             onOverlayOptionsChange = viewModel::setOverlayOptions,
             onOpenAllowedApps = { destination = destination.openAllowedApps() },
             onKeepScreenOnChange = viewModel::setKeepScreenOnEnabled,
+            onListenerPortChange = viewModel::setListenerPort,
             onBeginPairing = viewModel::beginPairing,
             onApproveHost = viewModel::approveHost,
             onRejectHost = viewModel::rejectHost,
@@ -171,6 +176,7 @@ fun HomeContent(
     onOverlayOptionsChange: (OverlayOptions) -> Unit = {},
     onOpenAllowedApps: () -> Unit = {},
     onKeepScreenOnChange: (Boolean) -> Unit = {},
+    onListenerPortChange: (Int) -> Unit = {},
     onBeginPairing: () -> Unit = {},
     onApproveHost: (String) -> Unit = {},
     onRejectHost: (String) -> Unit = {},
@@ -206,6 +212,7 @@ fun HomeContent(
                 onRejectHost = onRejectHost,
                 onRevokeHost = onRevokeHost,
                 onCopyPublicValue = onCopyPublicValue,
+                onListenerPortChange = onListenerPortChange,
             )
             OverlaySettingsCard(state.overlayOptions, onOverlayOptionsChange, state.accessibilityConnected)
             SectionCard(title = "App access") {
@@ -453,6 +460,7 @@ private fun ConnectionCard(
     onRejectHost: (String) -> Unit,
     onRevokeHost: (String) -> Unit,
     onCopyPublicValue: (String, String) -> Unit,
+    onListenerPortChange: (Int) -> Unit,
 ) {
     SectionCard(title = "Connection and session") {
         InfoRow(
@@ -468,6 +476,32 @@ private fun ConnectionCard(
             "Listener endpoint",
             listenerEndpointLabel(state.transport, state.endpointAddress, state.endpointPort),
         )
+        var portInput by rememberSaveable(state.listenerPortSetting) {
+            mutableStateOf(state.listenerPortSetting.toString())
+        }
+        val parsedPort = ListenerPortConfig.parse(portInput)
+        OutlinedTextField(
+            value = portInput,
+            onValueChange = { value -> if (value.length <= 5 && value.all(Char::isDigit)) portInput = value },
+            enabled = !state.remoteEnabled,
+            label = { Text("Listener port") },
+            supportingText = {
+                Text("1024–65535. Empty uses default ${ListenerPortConfig.DEFAULT_PORT}; applies when remote control starts.")
+            },
+            isError = parsedPort == null,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (parsedPort == null) {
+            Text("Enter a port from 1024 to 65535.", color = MaterialTheme.colorScheme.error)
+        }
+        OutlinedButton(
+            onClick = { parsedPort?.let(onListenerPortChange) },
+            enabled = !state.remoteEnabled && parsedPort != null && parsedPort != state.listenerPortSetting,
+        ) {
+            Text(if (parsedPort == ListenerPortConfig.DEFAULT_PORT) "Use default port" else "Save port")
+        }
         InfoRow(
             "Session",
             when {
