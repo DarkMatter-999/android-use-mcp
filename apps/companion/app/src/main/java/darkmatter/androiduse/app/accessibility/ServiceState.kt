@@ -193,6 +193,16 @@ object ServicePreferences {
     private const val KEY_OVERLAY_LABELS = "overlay_labels"
     private const val KEY_OVERLAY_ACTION_TRACE = "overlay_action_trace"
     private const val KEY_OVERLAY_CURSOR = "overlay_cursor"
+    private const val KEY_ALLOWED_LAUNCH_PACKAGES = "allowed_launch_packages"
+
+    fun allowedLaunchPackages(context: Context): Set<String> =
+        prefs(context).getStringSet(KEY_ALLOWED_LAUNCH_PACKAGES, emptySet()).orEmpty().toSet()
+
+    fun setAllowedLaunchPackages(context: Context, packages: Set<String>) {
+        prefs(context).edit {
+            putStringSet(KEY_ALLOWED_LAUNCH_PACKAGES, packages.filter(String::isNotBlank).toSet())
+        }
+    }
 
     fun overlayOptions(context: Context): darkmatter.androiduse.app.overlay.OverlayOptions {
         val preferences = prefs(context)

@@ -28,16 +28,18 @@ object ActionNames {
     val supported: Set<String> = nodeActions + gestureActions + globalActions
 }
 
-/** Fixed, phone-side package allowlist; never populated by an RPC caller. */
+/** Phone-side package policy; the caller supplies only locally selected packages. */
 object AppLaunchPolicy {
-    val allowedPackages: Set<String> = setOf("com.android.settings", "darkmatter.androiduse.app")
     private val packagePattern = Regex("^[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)+$")
 
-    fun validate(packageName: String): AppLaunchValidation = when {
+    fun validate(packageName: String, allowedPackages: Set<String>): AppLaunchValidation = when {
         !packagePattern.matches(packageName) -> AppLaunchValidation.INVALID
-        packageName !in allowedPackages -> AppLaunchValidation.NOT_ALLOWLISTED
+        !isAllowed(packageName, allowedPackages) -> AppLaunchValidation.NOT_ALLOWLISTED
         else -> AppLaunchValidation.ALLOWED
     }
+
+    fun isAllowed(packageName: String, allowedPackages: Set<String>): Boolean =
+        packagePattern.matches(packageName) && packageName in allowedPackages
 }
 
 enum class AppLaunchValidation { ALLOWED, INVALID, NOT_ALLOWLISTED }

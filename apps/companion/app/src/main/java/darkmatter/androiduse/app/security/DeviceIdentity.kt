@@ -59,7 +59,7 @@ class DeviceIdentity(
         certificate.verify(certificate.publicKey)
         require(certificate.publicKey.algorithm.equals("RSA", ignoreCase = true))
         require(certificate.publicKey.encoded.size >= MIN_RSA_PUBLIC_KEY_BYTES)
-        require(certificate.keyUsage?.getOrNull(KEY_USAGE_DIGITAL_SIGNATURE) == true)
+        require(hasDigitalSignatureKeyUsage(certificate.keyUsage))
         val validityMillis = certificate.notAfter.time - certificate.notBefore.time
         require(validityMillis in 1..MAX_CERTIFICATE_VALIDITY_MILLIS)
     }.isSuccess
@@ -69,6 +69,10 @@ class DeviceIdentity(
         private const val KEY_USAGE_DIGITAL_SIGNATURE = 0
         private const val MIN_RSA_PUBLIC_KEY_BYTES = 256
         private const val MAX_CERTIFICATE_VALIDITY_MILLIS = 10L * 365 * 24 * 60 * 60 * 1000
+
+        /** An absent X.509 keyUsage extension is unrestricted; an explicit one must permit signatures. */
+        internal fun hasDigitalSignatureKeyUsage(keyUsage: BooleanArray?): Boolean =
+            keyUsage == null || keyUsage.getOrNull(KEY_USAGE_DIGITAL_SIGNATURE) == true
 
         /** Production Android Keystore entry point; no private-key material is returned. */
         fun getOrCreate(context: Context): DeviceCertificate {

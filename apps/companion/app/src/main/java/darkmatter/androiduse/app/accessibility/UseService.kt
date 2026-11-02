@@ -793,7 +793,7 @@ class UseService : AccessibilityService() {
                     val packageName = (request.params["packageName"] as? kotlinx.serialization.json.JsonPrimitive)
                         ?.takeIf { it.isString }?.content
                         ?: return RpcResponse(PROTOCOL_VERSION, request.requestId, error = RpcError(RpcErrorCode.INVALID_MESSAGE, "packageName is required"))
-                    when (AppLaunchPolicy.validate(packageName)) {
+                    when (AppLaunchPolicy.validate(packageName, ServicePreferences.allowedLaunchPackages(this))) {
                         AppLaunchValidation.INVALID -> return RpcResponse(
                             PROTOCOL_VERSION, request.requestId,
                             error = RpcError(RpcErrorCode.INVALID_MESSAGE, "packageName is invalid"),

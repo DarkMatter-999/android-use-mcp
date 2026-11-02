@@ -28,6 +28,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -56,6 +57,7 @@ import java.util.Locale
 import darkmatter.androiduse.app.accessibility.TransportKind
 import darkmatter.androiduse.app.actions.ActionLogEntry
 import darkmatter.androiduse.app.overlay.OverlayOptions
+import darkmatter.androiduse.app.apps.LaunchableApp
 import darkmatter.androiduse.app.network.UiBounds
 import darkmatter.androiduse.app.ui.theme.AndroidUseTheme
 
@@ -103,6 +105,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
         onDisconnect = viewModel::disconnect,
         onWifiChange = viewModel::setWifiEnabled,
         onOverlayOptionsChange = viewModel::setOverlayOptions,
+        onSetAppAllowed = viewModel::setAppAllowed,
         onBeginPairing = viewModel::beginPairing,
         onApproveHost = viewModel::approveHost,
         onRejectHost = viewModel::rejectHost,
@@ -124,6 +127,7 @@ fun HomeContent(
     onDisconnect: () -> Unit,
     onWifiChange: (Boolean) -> Unit = {},
     onOverlayOptionsChange: (OverlayOptions) -> Unit = {},
+    onSetAppAllowed: (String, Boolean) -> Unit = { _, _ -> },
     onBeginPairing: () -> Unit = {},
     onApproveHost: (String) -> Unit = {},
     onRejectHost: (String) -> Unit = {},
@@ -160,6 +164,7 @@ fun HomeContent(
                 onCopyPublicValue = onCopyPublicValue,
             )
             OverlaySettingsCard(state.overlayOptions, onOverlayOptionsChange, state.accessibilityConnected)
+            AllowedAppsCard(state.launchableApps, state.allowedLaunchPackages, onSetAppAllowed)
             RecentActionsCard(state.recentActions)
             StopControl(state, onDisconnect)
             Text(
@@ -170,6 +175,37 @@ fun HomeContent(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(8.dp))
+        }
+    }
+}
+
+@Composable
+private fun AllowedAppsCard(
+    apps: List<LaunchableApp>,
+    allowedPackages: Set<String>,
+    onSetAppAllowed: (String, Boolean) -> Unit,
+) {
+    SectionCard(title = "Allowed apps") {
+        Text(
+            "Only apps selected here can be opened by an approved remote host. No apps are selected by default.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (apps.isEmpty()) {
+            Text("No launcher apps are visible to AndroidUse.", style = MaterialTheme.typography.bodyMedium)
+        } else {
+            apps.forEach { app ->
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(app.label, style = MaterialTheme.typography.bodyMedium)
+                        Text(app.packageName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Checkbox(
+                        checked = app.packageName in allowedPackages,
+                        onCheckedChange = { onSetAppAllowed(app.packageName, it) },
+                    )
+                }
+            }
         }
     }
 }

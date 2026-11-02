@@ -12,6 +12,13 @@ import org.junit.Test
 class DeviceIdentityTest {
 
     @Test
+    fun acceptsAbsentKeyUsageExtensionButRejectsExplicitMissingDigitalSignatureUsage() {
+        assertTrue(DeviceIdentity.hasDigitalSignatureKeyUsage(null))
+        assertTrue(DeviceIdentity.hasDigitalSignatureKeyUsage(booleanArrayOf(true)))
+        assertFalse(DeviceIdentity.hasDigitalSignatureKeyUsage(booleanArrayOf(false, true)))
+    }
+
+    @Test
     fun reusesValidKeystoreIdentityAndReturnsOnlyPublicCertificateData() {
         val certificate = testCertificate()
         val backend = FakeIdentityBackend(certificate)

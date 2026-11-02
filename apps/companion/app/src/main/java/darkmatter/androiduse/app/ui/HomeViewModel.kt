@@ -21,6 +21,10 @@ import darkmatter.androiduse.app.accessibility.UseService
 import darkmatter.androiduse.app.accessibility.isAccessibilityServiceEnabled
 import darkmatter.androiduse.app.actions.ActionLogEntry
 import darkmatter.androiduse.app.actions.ActionLogStore
+import darkmatter.androiduse.app.apps.AllowedAppsSelection
+import darkmatter.androiduse.app.apps.LaunchableApp
+import darkmatter.androiduse.app.apps.LaunchableAppRepository
+import darkmatter.androiduse.app.apps.PackageManagerLauncherActivitySource
 import darkmatter.androiduse.app.overlay.OverlayOptions
 
 /** Immutable screen state. Every field is derived from an observable source. */
@@ -49,6 +53,8 @@ data class HomeUiState(
     val approvedHosts: List<ApprovedHostState> = emptyList(),
     val transportError: String? = null,
     val overlayOptions: OverlayOptions = OverlayOptions(false, true, true, true, true),
+    val launchableApps: List<LaunchableApp> = emptyList(),
+    val allowedLaunchPackages: Set<String> = emptySet(),
 ) {
     override fun toString(): String = "HomeUiState(deviceModel=$deviceModel, apiLevel=$apiLevel, " +
         "accessibilityEnabled=$accessibilityEnabled, accessibilityConnected=$accessibilityConnected, " +
@@ -81,6 +87,10 @@ class HomeViewModel(
 ) : AutoCloseable {
 
     private val appContext = context.applicationContext
+    private val launchableApps = MutableStateFlow(
+        LaunchableAppRepository(PackageManagerLauncherActivitySource(appContext.packageManager)).listLaunchableApps(),
+    )
+    private val allowedLaunchPackages = MutableStateFlow(ServicePreferences.allowedLaunchPackages(appContext))
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val explanationAcknowledged = MutableStateFlow(
         ServicePreferences.hasAcknowledgedExplanation(appContext),
@@ -94,6 +104,8 @@ class HomeViewModel(
             actions = actionLogStore.recentEntries.value,
             acknowledged = explanationAcknowledged.value,
             statusOverride = null,
+            launchableApps = launchableApps.value,
+            allowedLaunchPackages = allowedLaunchPackages.value,
         ),
     )
 
@@ -102,13 +114,15 @@ class HomeViewModel(
     init {
         UseService.refreshState(appContext)
         scope.launch {
+            val appsSelection = combine(launchableApps, allowedLaunchPackages) { catalog, allowed -> catalog to allowed }
             combine(
                 UseService.state,
                 actionLogStore.recentEntries,
                 explanationAcknowledged,
                 statusOverride,
-            ) { service, actions, acknowledged, override ->
-                buildState(service, actions, acknowledged, override)
+                appsSelection,
+            ) { service, actions, acknowledged, override, selection ->
+                buildState(service, actions, acknowledged, override, selection.first, selection.second)
             }.collect { mutableState.value = it }
         }
     }
@@ -116,7 +130,16 @@ class HomeViewModel(
     /** Re-reads Android settings, e.g. after returning from accessibility settings. */
     fun refresh() {
         explanationAcknowledged.value = ServicePreferences.hasAcknowledgedExplanation(appContext)
+        launchableApps.value = LaunchableAppRepository(PackageManagerLauncherActivitySource(appContext.packageManager)).listLaunchableApps()
+        allowedLaunchPackages.value = ServicePreferences.allowedLaunchPackages(appContext)
         UseService.refreshState(appContext)
+    }
+
+    fun setAppAllowed(packageName: String, allowed: Boolean) {
+        if (launchableApps.value.none { it.packageName == packageName }) return
+        val selection = AllowedAppsSelection(allowedLaunchPackages.value).setAllowed(packageName, allowed)
+        ServicePreferences.setAllowedLaunchPackages(appContext, selection.allowedPackages)
+        allowedLaunchPackages.value = selection.allowedPackages
     }
 
     fun acknowledgeExplanation() {
@@ -246,6 +269,8 @@ class HomeViewModel(
         actions: List<ActionLogEntry>,
         acknowledged: Boolean,
         statusOverride: String?,
+        launchableApps: List<LaunchableApp>,
+        allowedLaunchPackages: Set<String>,
     ): HomeUiState {
         val accessibilityEnabled = service.enabled || isAccessibilityServiceEnabled(appContext)
         val status = statusOverride ?: when {
@@ -282,6 +307,8 @@ class HomeViewModel(
             approvedHosts = service.approvedHosts,
             transportError = service.lastError,
             overlayOptions = service.overlayOptions,
+            launchableApps = launchableApps,
+            allowedLaunchPackages = allowedLaunchPackages,
         )
     }
 }
