@@ -12,6 +12,13 @@ import darkmatter.androiduse.app.network.UiSnapshot
 
 class OverlayModelTest {
     @Test
+    fun disablingInspectorTurnsOffEveryChildOverlayOption() {
+        val disabled = options().withInspectorEnabled(false)
+
+        assertEquals(OverlayOptions(false, false, false, false, false), disabled)
+    }
+
+    @Test
     fun classifiesActionableCategoriesAndUsesFailureThenTargetPrecedence() {
         val editable = element("editable", editable = true, clickable = true)
         val clickable = element("clickable", clickable = true)

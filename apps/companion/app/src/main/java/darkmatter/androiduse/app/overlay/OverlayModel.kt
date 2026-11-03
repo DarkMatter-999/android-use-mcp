@@ -12,7 +12,13 @@ data class OverlayOptions(
     val labels: Boolean,
     val actionTrace: Boolean,
     val cursor: Boolean,
-)
+) {
+    fun withInspectorEnabled(enabled: Boolean): OverlayOptions = if (enabled) {
+        copy(inspector = true)
+    } else {
+        copy(inspector = false, bounds = false, labels = false, actionTrace = false, cursor = false)
+    }
+}
 
 data class OverlayDisplay(
     val widthPx: Int,

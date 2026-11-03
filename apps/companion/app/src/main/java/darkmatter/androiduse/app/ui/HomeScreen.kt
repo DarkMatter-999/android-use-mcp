@@ -283,7 +283,7 @@ private fun OverlaySettingsCard(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         OverlayToggle("Enable inspector", options.inspector, accessibilityConnected) {
-            onOptionsChange(options.copy(inspector = it))
+            onOptionsChange(options.withInspectorEnabled(it))
         }
         OverlayToggle("Element bounds", options.bounds, options.inspector) {
             onOptionsChange(options.copy(bounds = it))
