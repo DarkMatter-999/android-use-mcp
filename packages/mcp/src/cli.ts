@@ -3,17 +3,17 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { loadOrCreateHostIdentity, type HostIdentity, type RpcConnectionConfig } from '@android-use/transport';
+import { loadOrCreateHostIdentity, type HostIdentity } from '@android-use/transport';
 
 import { parseCliConfig } from './cli-config.js';
 import { runStdioServer } from './server.js';
-import { createRuntimeDependencies } from './runtime-dependencies.js';
+import { createRuntimeDependencies, type RuntimeConnectionConfig } from './runtime-dependencies.js';
 import type { McpToolDependencies } from './tools.js';
 
 export interface CliServices {
   readCertificate(path: string): Promise<string>;
   loadIdentity(directory: string): Promise<HostIdentity>;
-  createDependencies(config: RpcConnectionConfig): McpToolDependencies;
+  createDependencies(config: RuntimeConnectionConfig): McpToolDependencies;
   runServer(dependencies: McpToolDependencies): Promise<{ close(): Promise<void> }>;
   writeStderr(message: string): void;
 }
@@ -46,12 +46,14 @@ export async function runCli(
       services.readCertificate(config.certPath),
       services.loadIdentity(config.identityDir),
     ]);
-    const rpcConfig: RpcConnectionConfig = {
-      url: config.url,
+    const sharedConfig = {
       hostIdentity,
       deviceCertificatePem,
       deviceFingerprintSha256: config.pin,
     };
+    const rpcConfig: RuntimeConnectionConfig = config.discovery
+      ? { ...sharedConfig, discovery: true }
+      : { ...sharedConfig, url: config.url!, discovery: false };
     const dependencies = services.createDependencies(rpcConfig);
     const server = await services.runServer(dependencies);
 

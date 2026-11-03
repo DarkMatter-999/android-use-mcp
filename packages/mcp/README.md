@@ -33,16 +33,26 @@ The build emits Node-loadable ESM under `packages/*/dist`. The CLI entry point i
 
 ## Connection settings
 
-The CLI requires a secure WebSocket URL, device certificate path, and certificate pin. Values can be supplied as flags or environment variables; flags take precedence.
+The CLI requires exactly one endpoint mode (`--url` or `--discover`), plus the phone certificate path and pin. Values can be supplied as flags or environment variables; flags take precedence.
 
 | Flag | Environment variable | Meaning |
 | --- | --- | --- |
 | `--url` | `ANDROID_USE_URL` | `wss://host:port/rpc` endpoint |
+| `--discover` | `ANDROID_USE_DISCOVERY=true` | Discover exactly one Android Use companion via DNS-SD on the local Wi-Fi |
 | `--device-certificate` | `ANDROID_USE_DEVICE_CERTIFICATE` | PEM certificate used to authenticate/pin the phone |
 | `--device-certificate-pin` | `ANDROID_USE_DEVICE_CERTIFICATE_PIN` | SHA-256 certificate fingerprint (64 hex characters; colons are accepted) |
 | `--identity-dir` | `ANDROID_USE_IDENTITY_DIR` | Optional host identity directory; defaults to `~/.config/android-use-mcp` |
 
-The companion listener defaults to stable port `43419`; its phone-side **Connection and session** settings allow a custom port. Use the endpoint shown in Android Use for the MCP URL. The URL's IP can still change when the phone reconnects to Wi-Fi; a router DHCP reservation can keep that address stable.
+The companion listener defaults to stable port `43419`; its phone-side **Connection and session** settings allow a custom port. Enable **Expose on current Wi-Fi** on the phone for discovery. The MCP host and phone must share a network that permits multicast DNS/DNS-SD; guest networks, VPNs, and some access points block it. Discovery reports an error if no companion or multiple companions are found. For manually configured URL mode, use the endpoint shown in Android Use; a router DHCP reservation can keep its IP stable.
+
+For discovery mode, omit `--url` and pass `--discover` together with the same certificate, pin, and identity options:
+
+```sh
+node packages/mcp/dist/src/cli.js \
+  --discover \
+  --device-certificate /absolute/path/to/device-certificate.pem \
+  --device-certificate-pin <64-character-sha256-pin>
+```
 
 The host identity helper creates a client certificate and private key in a restricted local directory. Keep this directory private. To revoke a host, use the phone-side pairing controls; deleting the local identity does not revoke a certificate already approved by the phone.
 
@@ -53,7 +63,7 @@ Copy and adjust one of the examples:
 - [`examples/mcp-config/claude-code.json`](../../examples/mcp-config/claude-code.json)
 - [`examples/mcp-config/opencode.json`](../../examples/mcp-config/opencode.json)
 
-Replace the phone address, certificate path, and certificate pin with the values for your device. Do not put the host private key in MCP configuration. The first pairing request must be approved on the Android device.
+Choose either `--discover` (no phone IP in configuration) or `--url` with the current `wss://<phone-ip>:<port>/rpc`; do not configure both. Replace the certificate path and pin with values for your device. Do not put the host private key in MCP configuration. The first pairing request must be approved on the Android device.
 
 ## Batched JavaScript
 

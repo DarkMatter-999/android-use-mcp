@@ -12,10 +12,12 @@ describe('MCP usage examples', () => {
     const openCodeServer = opencode.mcp.servers['android-use'];
 
     expect(claudeServer).toMatchObject({ command: 'node' });
+    expect(claudeServer.args).toContain('--discover');
     expect(claudeServer.args).toContain('--device-certificate-pin');
     expect(claudeServer.args).toContain('<sha256-certificate-pin>');
     expect(openCodeServer).toMatchObject({ type: 'local', enabled: true });
     expect(openCodeServer.command).toContain('./packages/mcp/dist/src/cli.js');
+    expect(openCodeServer.command).toContain('--discover');
     expect(JSON.stringify([claude, opencode])).not.toMatch(/-----BEGIN (?:RSA )?PRIVATE KEY-----/);
   });
 

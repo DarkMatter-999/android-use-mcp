@@ -27,7 +27,7 @@ The local MCP command is `packages/mcp/dist/src/cli.js`. Keep the build output i
 1. Open Android Use and enable its Accessibility service through Android Settings. This is a user-controlled Android setting; the app cannot enable it for you.
 2. Enable **Remote control** in the app. Keep the app's visible notification active.
 3. In **Connection and session**, copy the **Phone certificate fingerprint** and **Public certificate**. Save the PEM certificate to a persistent file on the computer, for example `~/.config/android-use/device-certificate.pem`. Do not use a temporary directory.
-4. Note the **Listener endpoint** shown in the app. The listener uses stable port `43419` by default; you can set a custom port in **Connection and session** while remote control is off. For Wi-Fi, enable **Expose on current Wi-Fi** and use the phone's displayed IP address and port. The MCP URL is `wss://<phone-ip>:<port>/rpc`. Reserve the phone's IP in your router if you also want the full URL to remain stable across Wi-Fi reconnects.
+4. The listener uses stable port `43419` by default; you can set a custom port in **Connection and session** while remote control is off. For Wi-Fi, enable **Expose on current Wi-Fi**. To avoid entering the phone IP, use the host's `--discover` option; the phone advertises its endpoint over DNS-SD while Wi-Fi exposure is active. The computer and phone must be on the same LAN and multicast DNS/DNS-SD must be allowed. Alternatively, use the displayed IP and port in `wss://<phone-ip>:<port>/rpc`; a router DHCP reservation can keep that manual URL stable.
 
 The fingerprint is the SHA-256 pin for the phone certificate (64 hexadecimal characters). The PEM file and fingerprint must come from the same phone identity. The public phone certificate is not a private key, but avoid placing it in a temporary location that may disappear.
 
@@ -45,7 +45,7 @@ For example, if you choose local port `33931` and the app reports phone listener
 
 OpenCode V2's user configuration on Linux is normally `~/.config/opencode/opencode.json` (or `opencode.jsonc`). If the file already exists, preserve its other settings and merge the `mcp.servers.android-use` entry into it. OpenCode's `mcp.servers` structure uses a server name beneath `servers`.
 
-Replace every placeholder below with your actual values. Use absolute paths; JSON does not expand `~`. The `--identity-dir` option is a separate, persistent directory for this computer's host certificate and private key. It is created by the MCP server and must be kept private. It is not the phone certificate file.
+Replace every placeholder below with your actual values. This example uses discovery, so no phone IP or `--url` is required. Use absolute paths; JSON does not expand `~`. The `--identity-dir` option is a separate, persistent directory for this computer's host certificate and private key. It is created by the MCP server and must be kept private. It is not the phone certificate file.
 
 ```json
 {
@@ -57,8 +57,7 @@ Replace every placeholder below with your actual values. Use absolute paths; JSO
         "command": [
           "node",
           "/absolute/path/to/android-use/packages/mcp/dist/src/cli.js",
-          "--url",
-          "wss://<phone-ip>:<port>/rpc",
+          "--discover",
           "--device-certificate",
           "/absolute/path/to/device-certificate.pem",
           "--device-certificate-pin",
@@ -100,7 +99,8 @@ Use `android_list_apps` to see launcher-visible apps the phone owner has already
 
 - **MCP server fails to start:** confirm Node.js 22+, run the build command again, and check that the CLI and phone PEM paths are absolute and readable.
 - **Invalid fingerprint:** copy the complete SHA-256 fingerprint from the phone and ensure it matches the PEM certificate you saved.
-- **TLS or connection error:** confirm the listener is enabled, the phone IP/port is current, both devices can reach each other, and the URL ends in `/rpc` and uses `wss://`.
+- **Discovery finds no phone or multiple phones:** confirm Wi-Fi exposure is enabled, host and phone share the same LAN, multicast DNS/DNS-SD is not filtered, and only one Android Use companion is advertising. For manual URL mode, confirm the current phone IP/port and `wss://.../rpc` endpoint.
+- **TLS or connection error:** confirm the listener is enabled, the phone certificate PEM and SHA-256 pin match, both devices can reach each other, and any manual URL ends in `/rpc` and uses `wss://`.
 - **USB connection fails:** check `adb devices` and that the `adb forward` rule is active for the listener's current port.
 - **Pairing required:** call `android_pair`, then approve the matching pending host on the phone before attempting other device operations.
 - **Host identity error:** use a dedicated `--identity-dir` directory. Do not add the phone certificate or unrelated files to the host identity directory.

@@ -81,6 +81,103 @@ class TransportLifecycleTest {
     }
 
     @Test
+    fun `wifi endpoint publication follows transport transitions`() {
+        val published = mutableListOf<RpcEndpoint?>()
+        val lifecycle = TransportLifecycle(
+            start = { endpoint(it) },
+            stop = {},
+            publishWifiEndpoint = { published += it },
+        )
+
+        assertTrue(lifecycle.enable(accessibilityReady = true, notificationVisible = true))
+        assertTrue(lifecycle.enableWifi(InetAddress.getByName("192.168.1.20")))
+        assertTrue(lifecycle.enableLoopback())
+        lifecycle.disable()
+
+        assertEquals(listOf(endpoint(BindMode.Wifi(InetAddress.getByName("192.168.1.20"))), null), published.take(2))
+        assertEquals(null, published.last())
+    }
+
+    @Test
+    fun `wifi publication failure rolls back listener and transport state`() {
+        var stops = 0
+        val lifecycle = TransportLifecycle(
+            start = { endpoint(it) },
+            stop = { stops++ },
+            publishWifiEndpoint = { if (it != null) throw IllegalStateException("NSD unavailable") },
+        )
+
+        assertTrue(lifecycle.enable(accessibilityReady = true, notificationVisible = true))
+        assertFalse(lifecycle.enableWifi(InetAddress.getByName("192.168.1.20")))
+
+        assertFalse(lifecycle.state().remoteEnabled)
+        assertNull(lifecycle.state().endpoint)
+        assertEquals(TransportKind.NONE, lifecycle.state().transport)
+        assertEquals(2, stops)
+    }
+
+    @Test
+    fun `refreshing same wifi address does not restart listener or advertisement`() {
+        val events = mutableListOf<String>()
+        val address = InetAddress.getByName("192.168.1.20")
+        val lifecycle = TransportLifecycle(
+            start = { mode -> events += "start:$mode"; endpoint(mode) },
+            stop = { events += "stop" },
+            publishWifiEndpoint = { events += if (it == null) "withdraw" else "publish:${it.address.hostAddress}" },
+        )
+        assertTrue(lifecycle.enable(accessibilityReady = true, notificationVisible = true))
+        assertTrue(lifecycle.enableWifi(address))
+        val beforeRefresh = events.toList()
+
+        assertTrue(lifecycle.refreshWifiAddress(address))
+
+        assertEquals(beforeRefresh, events)
+    }
+
+    @Test
+    fun `refreshing changed wifi address withdraws old endpoint before publishing new one`() {
+        val events = mutableListOf<String>()
+        val oldAddress = InetAddress.getByName("192.168.1.20")
+        val newAddress = InetAddress.getByName("192.168.1.21")
+        val lifecycle = TransportLifecycle(
+            start = { mode -> events += "start:${(mode as? BindMode.Wifi)?.address?.hostAddress ?: "loopback"}"; endpoint(mode) },
+            stop = { events += "stop" },
+            publishWifiEndpoint = { events += if (it == null) "withdraw" else "publish:${it.address.hostAddress}" },
+        )
+        assertTrue(lifecycle.enable(accessibilityReady = true, notificationVisible = true))
+        assertTrue(lifecycle.enableWifi(oldAddress))
+        events.clear()
+
+        assertTrue(lifecycle.refreshWifiAddress(newAddress))
+
+        assertEquals(
+            listOf("withdraw", "stop", "start:192.168.1.21", "publish:192.168.1.21"),
+            events,
+        )
+        assertEquals("192.168.1.21", lifecycle.state().endpoint?.address?.hostAddress)
+    }
+
+    @Test
+    fun `refreshing wifi with no address stops listener and withdraws endpoint`() {
+        val published = mutableListOf<RpcEndpoint?>()
+        var stops = 0
+        val lifecycle = TransportLifecycle(
+            start = { endpoint(it) },
+            stop = { stops++ },
+            publishWifiEndpoint = { published += it },
+        )
+        assertTrue(lifecycle.enable(accessibilityReady = true, notificationVisible = true))
+        assertTrue(lifecycle.enableWifi(InetAddress.getByName("192.168.1.20")))
+
+        assertFalse(lifecycle.refreshWifiAddress(null))
+
+        assertNull(lifecycle.state().endpoint)
+        assertFalse(lifecycle.state().remoteEnabled)
+        assertEquals(null, published.last())
+        assertEquals(2, stops)
+    }
+
+    @Test
     fun `unbinding and destroying both stop an active listener idempotently`() {
         var stops = 0
         val lifecycle = TransportLifecycle(start = { endpoint(it) }, stop = { stops++ })

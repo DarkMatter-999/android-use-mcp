@@ -1,26 +1,44 @@
 import { AndroidDevice } from '@android-use/client';
 import { executeCode } from '@android-use/runtime';
 import { PairingClient, RpcConnection, type RpcConnectionConfig } from '@android-use/transport';
+import { createBonjourDiscoveryAdapter, discoverCompanionUrl } from './discovery.js';
 
 import type { McpGestureInput, McpToolDependencies } from './tools.js';
 
 export interface RuntimeDependencyFactories {
   connect(config: RpcConnectionConfig): Promise<RpcConnection>;
+  discover?(): Promise<string>;
 }
 
+type SharedConnectionConfig = Omit<RpcConnectionConfig, 'url'>;
+export type RuntimeConnectionConfig = SharedConnectionConfig & (
+  | { url: string; discovery?: false }
+  | { url?: undefined; discovery: true }
+);
+
 export function createRuntimeDependencies(
-  config: RpcConnectionConfig,
+  config: RuntimeConnectionConfig,
   factories: RuntimeDependencyFactories = { connect: (value) => RpcConnection.connect(value) },
 ): McpToolDependencies {
   let connection: RpcConnection | undefined;
   let device: AndroidDevice | undefined;
   let connectionAttempt: Promise<AndroidDevice> | undefined;
   let unsubscribeFromConnection: (() => void) | undefined;
+  const discover = factories.discover ?? (() => discoverCompanionUrl(createBonjourDiscoveryAdapter()));
 
   const connectedDevice = async (): Promise<AndroidDevice> => {
     if (connection && device) return device;
     const attempt = connectionAttempt ?? (connectionAttempt = (async () => {
-      const connected = await factories.connect(config);
+      const url = config.discovery ? await discover() : config.url;
+      const connected = await factories.connect({
+        url,
+        hostIdentity: config.hostIdentity,
+        deviceCertificatePem: config.deviceCertificatePem,
+        deviceFingerprintSha256: config.deviceFingerprintSha256,
+        ...(config.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: config.requestTimeoutMs }),
+        ...(config.heartbeatIntervalMs === undefined ? {} : { heartbeatIntervalMs: config.heartbeatIntervalMs }),
+        ...(config.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: config.idleTimeoutMs }),
+      });
       connection = connected;
       device = new AndroidDevice(connected);
       unsubscribeFromConnection = connected.onEvent((event) => {

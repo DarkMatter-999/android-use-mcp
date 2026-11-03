@@ -4,8 +4,7 @@
       "command": "node",
       "args": [
         "./packages/mcp/dist/src/cli.js",
-        "--url",
-        "wss://<phone-ip>:47831/rpc",
+        "--discover",
         "--device-certificate",
         "/absolute/path/to/device-cert.pem",
         "--device-certificate-pin",

@@ -68,6 +68,42 @@ describe('lazy MCP runtime dependencies', () => {
     expect(connect).toHaveBeenCalledTimes(2);
   });
 
+  it('discovers the endpoint before connecting and forwards the configured TLS pin unchanged', async () => {
+    const connection = new FakeConnection();
+    const connect = vi.fn(async () => connection as unknown as RpcConnection);
+    const discover = vi.fn(async () => 'wss://android-use.local:43419/rpc');
+    const dependencies = createRuntimeDependencies({
+      hostIdentity,
+      deviceCertificatePem: 'pinned-device-certificate',
+      deviceFingerprintSha256: config.deviceFingerprintSha256,
+      discovery: true,
+    }, { connect, discover });
+
+    await dependencies.status();
+
+    expect(discover).toHaveBeenCalledOnce();
+    expect(connect).toHaveBeenCalledWith({
+      url: 'wss://android-use.local:43419/rpc',
+      hostIdentity,
+      deviceCertificatePem: 'pinned-device-certificate',
+      deviceFingerprintSha256: config.deviceFingerprintSha256,
+    });
+  });
+
+  it('does not connect when discovery fails', async () => {
+    const connect = vi.fn(async () => new FakeConnection() as unknown as RpcConnection);
+    const discover = vi.fn(async () => { throw new Error('no Android Use companion found'); });
+    const dependencies = createRuntimeDependencies({
+      hostIdentity,
+      deviceCertificatePem: 'device-certificate',
+      deviceFingerprintSha256: config.deviceFingerprintSha256,
+      discovery: true,
+    }, { connect, discover });
+
+    await expect(dependencies.status()).rejects.toThrow(/no Android Use companion/i);
+    expect(connect).not.toHaveBeenCalled();
+  });
+
   it('shares one connection attempt across simultaneous first tool calls', async () => {
     const connection = new FakeConnection();
     const connect = vi.fn(async () => connection as unknown as RpcConnection);

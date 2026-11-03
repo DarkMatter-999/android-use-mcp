@@ -88,6 +88,7 @@ internal class ControllerLeaseState {
 internal class TransportLifecycle(
     private val start: (BindMode) -> RpcEndpoint,
     private val stop: () -> Unit,
+    private val publishWifiEndpoint: (RpcEndpoint?) -> Unit = {},
 ) {
     private var endpoint: RpcEndpoint? = null
     private var enabled = false
@@ -114,12 +115,17 @@ internal class TransportLifecycle(
     fun enableWifi(address: InetAddress): Boolean {
         if (!enabled) return false
         val wifiMode = try { BindMode.Wifi(address) } catch (_: IllegalArgumentException) { return false }
+        if (mode == wifiMode && endpoint?.address == address) return true
         return try {
+            if (mode is BindMode.Wifi) publishWifiEndpoint(null)
             stop()
+            endpoint = null
             endpoint = start(wifiMode)
             mode = wifiMode
+            publishWifiEndpoint(endpoint)
             true
         } catch (_: Exception) {
+            runCatching { publishWifiEndpoint(null) }
             runCatching(stop)
             endpoint = null
             enabled = false
@@ -128,15 +134,28 @@ internal class TransportLifecycle(
     }
 
     @Synchronized
+    fun refreshWifiAddress(address: InetAddress?): Boolean {
+        if (!enabled || mode !is BindMode.Wifi) return false
+        if (address == null || runCatching { BindMode.Wifi(address) }.isFailure) {
+            disable()
+            return false
+        }
+        return enableWifi(address)
+    }
+
+    @Synchronized
     fun enableLoopback(): Boolean {
         if (!enabled) return false
         if (mode == BindMode.Loopback && endpoint != null) return true
         return try {
+            if (mode is BindMode.Wifi) publishWifiEndpoint(null)
             stop()
+            endpoint = null
             mode = BindMode.Loopback
             endpoint = start(mode)
             true
         } catch (_: Exception) {
+            runCatching { publishWifiEndpoint(null) }
             runCatching(stop)
             endpoint = null
             enabled = false
@@ -147,6 +166,7 @@ internal class TransportLifecycle(
     @Synchronized
     fun disable() {
         val wasActive = endpoint != null
+        if (mode is BindMode.Wifi) runCatching { publishWifiEndpoint(null) }
         endpoint = null
         enabled = false
         mode = BindMode.Loopback

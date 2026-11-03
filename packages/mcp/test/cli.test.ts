@@ -70,4 +70,20 @@ describe('MCP CLI lifecycle', () => {
     expect(close).toHaveBeenCalledTimes(1);
     expect(disconnect).toHaveBeenCalledTimes(1);
   });
+
+  it('passes discovery mode to the runtime without requiring a URL', async () => {
+    const { services } = createServices();
+
+    await expect(runCli([
+      '--discover',
+      '--device-certificate', '/tmp/device.pem',
+      '--device-certificate-pin', 'CD'.repeat(32),
+    ], {}, services, { once: () => {} })).resolves.toBe(0);
+
+    expect(services.createDependencies).toHaveBeenCalledWith(expect.objectContaining({
+      discovery: true,
+      deviceCertificatePem: 'device-certificate-pem',
+      deviceFingerprintSha256: 'CD'.repeat(32),
+    }));
+  });
 });

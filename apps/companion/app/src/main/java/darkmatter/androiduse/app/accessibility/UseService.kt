@@ -10,6 +10,10 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.graphics.Path
 import android.graphics.Rect
 import android.os.Build
@@ -78,6 +82,8 @@ import darkmatter.androiduse.app.screenshots.ScreenshotCapture
 import darkmatter.androiduse.app.screenshots.ScreenshotResult
 import darkmatter.androiduse.app.network.ScreenshotRpcResult
 import darkmatter.androiduse.app.network.AppListRpcResult
+import darkmatter.androiduse.app.network.NsdWifiServiceAdvertiser
+import darkmatter.androiduse.app.network.WifiServiceAdvertiser
 import darkmatter.androiduse.app.apps.LaunchableAppRepository
 import darkmatter.androiduse.app.apps.PackageManagerLauncherActivitySource
 import darkmatter.androiduse.app.overlay.InspectorOverlay
@@ -127,6 +133,12 @@ class UseService : AccessibilityService() {
     private var rpcServer: RpcServer? = null
 
     @Volatile
+    private var wifiServiceAdvertiser: WifiServiceAdvertiser? = null
+
+    @Volatile
+    private var wifiNetworkCallback: ConnectivityManager.NetworkCallback? = null
+
+    @Volatile
     private var pairingManager: PairingManager? = null
 
     @Volatile
@@ -141,9 +153,14 @@ class UseService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        wifiServiceAdvertiser = NsdWifiServiceAdvertiser(this, ::recordWifiDiscoveryError)
         transportLifecycle = TransportLifecycle(
             start = { mode -> startTransport(mode, ServicePreferences.listenerPort(this)) },
             stop = ::stopTransport,
+            publishWifiEndpoint = { endpoint ->
+                if (endpoint == null) wifiServiceAdvertiser?.stop()
+                else wifiServiceAdvertiser?.advertise(endpoint)
+            },
         )
         connected = true
         lastError = null
@@ -177,6 +194,9 @@ class UseService : AccessibilityService() {
 
     override fun onUnbind(intent: Intent?): Boolean {
         transportLifecycle?.onUnbind()
+        unregisterWifiNetworkCallback()
+        wifiServiceAdvertiser?.stop()
+        wifiServiceAdvertiser = null
         connected = false
         overlayActionJob?.cancel()
         overlayActionJob = null
@@ -194,6 +214,9 @@ class UseService : AccessibilityService() {
 
     override fun onDestroy() {
         transportLifecycle?.onDestroy()
+        unregisterWifiNetworkCallback()
+        wifiServiceAdvertiser?.stop()
+        wifiServiceAdvertiser = null
         debounceJob?.cancel()
         overlayActionJob?.cancel()
         overlayActionJob = null
@@ -368,6 +391,69 @@ class UseService : AccessibilityService() {
     private fun recordOverlayError(error: Exception) {
         // Keep visualization failures in the existing redacted diagnostic channel.
         lastError = "Inspector overlay unavailable (${error.javaClass.simpleName})"
+    }
+
+    private fun recordWifiDiscoveryError(message: String) {
+        scope.launch {
+            lastError = message
+            publishState()
+        }
+    }
+
+    private fun registerWifiNetworkCallback(): Boolean {
+        if (wifiNetworkCallback != null) return true
+        val manager = getSystemService(ConnectivityManager::class.java) ?: return false
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) = refreshWifiTransportFromNetwork()
+
+            override fun onLinkPropertiesChanged(network: Network, linkProperties: android.net.LinkProperties) =
+                refreshWifiTransportFromNetwork()
+
+            override fun onLost(network: Network) = refreshWifiTransportFromNetwork()
+        }
+        return try {
+            val request = NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .build()
+            manager.registerNetworkCallback(request, callback)
+            wifiNetworkCallback = callback
+            true
+        } catch (_: SecurityException) {
+            lastError = "Wi-Fi network monitoring permission is unavailable"
+            false
+        } catch (_: RuntimeException) {
+            lastError = "Wi-Fi network monitoring could not start"
+            false
+        }
+    }
+
+    private fun unregisterWifiNetworkCallback() {
+        val callback = wifiNetworkCallback ?: return
+        wifiNetworkCallback = null
+        runCatching { getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(callback) }
+    }
+
+    private fun refreshWifiTransportFromNetwork() {
+        scope.launch(Dispatchers.Main.immediate) {
+            val address = activeWifiAddress()
+            val accepted = transportLifecycle?.refreshWifiAddress(address) == true
+            if (accepted) {
+                lastError = null
+                publishState()
+                return@launch
+            }
+            unregisterWifiNetworkCallback()
+            ServicePreferences.setRemoteEnabled(this@UseService, false)
+            SessionNotification.cancel(this@UseService)
+            clearSession()
+            lastError = if (address == null) {
+                "Wi-Fi network unavailable; remote control was stopped"
+            } else {
+                "Wi-Fi listener could not be rebound; remote control was stopped"
+            }
+            updateKeepScreenOn()
+            publishState()
+        }
     }
 
     private fun hideOverlayForCapture(): AutoCloseable = inspectorOverlay?.hideForCapture() ?: AutoCloseable { }
@@ -672,12 +758,14 @@ class UseService : AccessibilityService() {
 
         fun setWifiEnabled(context: Context, enabled: Boolean): Boolean {
             val service = instance ?: return false
-            val accepted = if (enabled) {
+            var accepted = if (enabled) {
                 val address = activeWifiAddress() ?: return false
                 service.transportLifecycleWifi(address)
             } else {
                 service.transportLifecycleLoopback()
             }
+            if (enabled && accepted) accepted = service.registerWifiNetworkCallback()
+            if (!enabled || !accepted) service.unregisterWifiNetworkCallback()
             if (!accepted) {
                 service.transportLifecycleDisable()
                 ServicePreferences.setRemoteEnabled(context.applicationContext, false)
@@ -737,11 +825,17 @@ class UseService : AccessibilityService() {
         notificationVisible = SessionNotification.canPost(this) && ServicePreferences.isRemoteEnabled(this),
     ) == true
 
-    private fun transportLifecycleDisable() = transportLifecycle?.disable()
+    private fun transportLifecycleDisable() {
+        unregisterWifiNetworkCallback()
+        transportLifecycle?.disable()
+    }
 
     private fun transportLifecycleWifi(address: java.net.InetAddress): Boolean = transportLifecycle?.enableWifi(address) == true
 
-    private fun transportLifecycleLoopback(): Boolean = transportLifecycle?.enableLoopback() == true
+    private fun transportLifecycleLoopback(): Boolean {
+        unregisterWifiNetworkCallback()
+        return transportLifecycle?.enableLoopback() == true
+    }
 
     private fun startTransport(mode: BindMode, port: Int): RpcEndpoint {
         val certificate = DeviceIdentity.getOrCreate(this)
